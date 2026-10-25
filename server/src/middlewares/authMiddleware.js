@@ -34,3 +34,18 @@ export const requireAuth = (req, res, next) => {
     });
   }
 };
+export const optionalAuth = (req, res, next) => {
+  try {
+    let token = req.cookies?.token;
+    if (!token && req.headers.authorization?.startsWith('Bearer ')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+    if (token) {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      req.user = { id: decoded.userId, username: decoded.username, role: decoded.role };
+    }
+  } catch {
+    // Ignore invalid token for public routes
+  }
+  next();
+};

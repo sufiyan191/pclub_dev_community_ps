@@ -9,11 +9,11 @@ import {
   globalOmniSearch,
   getNotifications,
 } from '../controllers/serverController.js';
-import { requireAuth } from '../middlewares/authMiddleware.js';
+import { requireAuth, optionalAuth } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 
-router.get('/', getServers);
+router.get('/', optionalAuth, getServers);
 router.post('/', requireAuth, createServer);
 router.post('/:serverId/join', requireAuth, joinServer);
 router.get('/:serverId/groups', getServerGroups);
