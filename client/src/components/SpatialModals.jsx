@@ -1,6 +1,6 @@
 'use client';
-import React, { useState } from 'react';
-import { X, Plus, CheckCircle2, Sparkles, User, Image as ImageIcon, Shield, Award } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Sparkles, Image as ImageIcon, Award, Edit3 } from 'lucide-react';
 import { apiRequest } from '../lib/api';
 
 export default function SpatialModals({
@@ -10,6 +10,7 @@ export default function SpatialModals({
   setCurrentUser,
   activeServer,
   activeGroup,
+  editingPost,
   onRefreshData,
   bgImage,
   setBgImage,
@@ -33,6 +34,18 @@ export default function SpatialModals({
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Pre-fill form when editing an existing post
+  useEffect(() => {
+    if (activeModal === 'EDIT_POST' && editingPost) {
+      setFormData((prev) => ({
+        ...prev,
+        postTitle: editingPost.title || '',
+        postBody: editingPost.body_markdown || '',
+        postTags: (editingPost.tags || []).join(', '),
+      }));
+    }
+  }, [activeModal, editingPost]);
 
   if (!activeModal) return null;
 
@@ -124,7 +137,7 @@ export default function SpatialModals({
     }
   };
 
-  // 4. Handle Create Post (Question/Topic with Markdown & Code)
+  // 4. Handle Create Post
   const handleCreatePost = async (e) => {
     e.preventDefault();
     if (!activeGroup) return setError('Please select a group first.');
@@ -152,7 +165,34 @@ export default function SpatialModals({
     }
   };
 
-  // 5. Handle Profile Update
+  // 5. Handle Edit Own Post (PS 06 Core Requirement)
+  const handleEditPostSubmit = async (e) => {
+    e.preventDefault();
+    if (!editingPost) return;
+    setError('');
+    setLoading(true);
+    try {
+      await apiRequest(`/api/posts/${editingPost.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          title: formData.postTitle,
+          body_markdown: formData.postBody,
+          tags: formData.postTags
+            .split(',')
+            .map((t) => t.trim().toLowerCase())
+            .filter(Boolean),
+        }),
+      });
+      await onRefreshData();
+      closeModal();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 6. Handle Profile Update
   const handleUpdateProfile = async (e) => {
     e.preventDefault();
     setError('');
@@ -179,26 +219,26 @@ export default function SpatialModals({
   const presetBackgrounds = [
     {
       name: 'VisionOS Concrete Loft (Default)',
-      url: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2000&q=80',
+      url: '[https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2000&q=80](https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2000&q=80)',
     },
     {
       name: 'Dark Alpine Night',
-      url: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=2000&q=80',
+      url: '[https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=2000&q=80](https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=2000&q=80)',
     },
     {
       name: 'Minimalist Dark Studio',
-      url: 'https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&w=2000&q=80',
+      url: '[https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&w=2000&q=80](https://images.unsplash.com/photo-1618221195710-dd6b41faaea6?auto=format&fit=crop&w=2000&q=80)',
     },
   ];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
-      <div className="spatial-glass w-full max-w-lg rounded-3xl p-6 text-white relative border border-white/25 animate-in fade-in zoom-in-95 duration-200 max-h-[88vh] overflow-y-auto">
+      <div className="spatial-glass w-full max-w-lg rounded-3xl p-6 text-white relative border border-white/25 max-h-[88vh] overflow-y-auto">
         <button
           onClick={closeModal}
           className="absolute top-5 right-5 w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition"
         >
-          <X className="w-4 h-4" />
+          <X className="w-4 h-4"/>
         </button>
 
         {error && (
@@ -305,19 +345,63 @@ export default function SpatialModals({
           </div>
         )}
 
+        {/* EDIT OWN POST MODAL (PS 06 Core Requirement) */}
+        {activeModal === 'EDIT_POST' && editingPost && (
+          <form onSubmit={handleEditPostSubmit} className="space-y-4">
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <Edit3 className="w-5 h-5 text-sky-400"/> Edit Your Post
+            </h2>
+            <div>
+              <label className="text-xs text-white/70 block mb-1">Title</label>
+              <input
+                type="text"
+                required
+                className="w-full px-3.5 py-2 rounded-xl bg-black/40 border border-white/15 text-sm"
+                value={formData.postTitle}
+                onChange={(e) => setFormData({ ...formData, postTitle: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-white/70 block mb-1">Markdown Body & Code Blocks</label>
+              <textarea
+                rows={5}
+                required
+                className="w-full px-3.5 py-2 rounded-xl bg-black/40 border border-white/15 text-sm font-mono"
+                value={formData.postBody}
+                onChange={(e) => setFormData({ ...formData, postBody: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-white/70 block mb-1">Tags (comma-separated)</label>
+              <input
+                type="text"
+                className="w-full px-3.5 py-2 rounded-xl bg-black/40 border border-white/15 text-xs"
+                value={formData.postTags}
+                onChange={(e) => setFormData({ ...formData, postTags: e.target.value })}
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="px-5 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-xs font-semibold transition"
+            >
+              {loading ? 'Saving...' : 'Save Changes'}
+            </button>
+          </form>
+        )}
+
         {/* CREATE HUB MODAL (Server / Group / Post) */}
         {activeModal === 'CREATE_HUB' && (
           <div className="space-y-6">
             <div>
               <h2 className="text-lg font-semibold flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-sky-400" /> Create in Spatial Workspace
+                <Sparkles className="w-5 h-5 text-sky-400"/> Create in Spatial Workspace
               </h2>
               <p className="text-xs text-white/60">
                 Launch a new community server, add a channel group, or post a Markdown question.
               </p>
             </div>
 
-            {/* Form 1: New Post in Current Group */}
             {activeGroup && (
               <form onSubmit={handleCreatePost} className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-3">
                 <h3 className="text-sm font-semibold text-sky-300">
@@ -356,7 +440,6 @@ export default function SpatialModals({
               </form>
             )}
 
-            {/* Form 2: New Group in Current Server */}
             {activeServer && (
               <form onSubmit={handleCreateGroup} className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-3">
                 <h3 className="text-sm font-semibold text-emerald-300">
@@ -389,7 +472,6 @@ export default function SpatialModals({
               </form>
             )}
 
-            {/* Form 3: New Server */}
             <form onSubmit={handleCreateServer} className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-3">
               <h3 className="text-sm font-semibold text-amber-300">3. Launch a Brand New Server</h3>
               <div className="grid grid-cols-3 gap-2">
@@ -429,14 +511,13 @@ export default function SpatialModals({
           </div>
         )}
 
-        {/* SETTINGS & PROFILE MODAL (Includes Custom Background Chooser + User Profile Activity) */}
+        {/* SETTINGS & PROFILE MODAL */}
         {activeModal === 'SETTINGS' && (
           <div className="space-y-5">
             <h2 className="text-lg font-semibold flex items-center gap-2">
               <ImageIcon className="w-5 h-5 text-sky-400" /> Spatial Environment & Profile Settings
             </h2>
 
-            {/* Custom Background Image Chooser */}
             <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-3">
               <label className="text-xs font-semibold text-white/80 block">
                 Custom Spatial Background Image URL
@@ -468,7 +549,6 @@ export default function SpatialModals({
               </div>
             </div>
 
-            {/* Edit Current User Profile */}
             {currentUser && (
               <form onSubmit={handleUpdateProfile} className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-3">
                 <div className="flex items-center justify-between">
@@ -506,7 +586,7 @@ export default function SpatialModals({
           </div>
         )}
 
-        {/* PUBLIC USER PROFILE & ACTIVITY VIEWER (PS 06 Core Requirement) */}
+        {/* PUBLIC USER PROFILE & ACTIVITY VIEWER */}
         {activeModal === 'USER_PROFILE' && viewedProfile && (
           <div className="space-y-4">
             <div className="flex items-center gap-4">
