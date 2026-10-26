@@ -2,14 +2,14 @@
 
 A VisionOS-inspired **3D Spatial Glassmorphism Developer Community Platform** built for the **Programming Club (Software Division), IIT Indore** Volunteer Induction (Problem Statement 6 — Advanced Level).
 
-SpatialDev merges the real-time community hierarchy of **Discord** (*Servers ➔ Groups ➔ Live Group Chat*) with the structured technical knowledge-sharing of **Stack Overflow & Dev.to** (*Markdown & Code Posts, Tag Filtering, Atomic Upvoting/Downvoting, Accepted Answers, and Developer Reputation*) inside an interactive 3D spatial workspace.
+SpatialDev merges the real-time community hierarchy of **Discord** (_Servers ➔ Groups ➔ Live Group Chat_) with the structured technical knowledge-sharing of **Stack Overflow & Dev.to** (_Markdown & Code Posts, Tag Filtering, Atomic Upvoting/Downvoting, Accepted Answers, and Developer Reputation_) inside an interactive 3D spatial workspace.
 
 ---
 
 ## 🔗 Live Deployment & Demo Links
 
-- **Live Frontend (Vercel):** `[Paste your Vercel link here after deploying]`
-- **Live Backend API & WebSockets (Render):** `[Paste your Render link here after deploying]`
+- **Live Frontend (Vercel):** `https://pclub-dev-community-ps.vercel.app`
+- **Live Backend API & WebSockets (Render):** `https://pclub-swd-ps.onrender.com/health`
 - **GitHub Repository:** `https://github.com/sufiyan191/pclub_dev_community_ps`
 
 ---
@@ -17,6 +17,7 @@ SpatialDev merges the real-time community hierarchy of **Discord** (*Servers ➔
 ## ✨ Features Implemented
 
 ### A. Core Requirements (Strictly Adhering to PS 06)
+
 1. **Authentication & Security:**
    - User registration, login, and logout (`POST /api/auth/register`, `/login`, `/logout`).
    - Password salting and hashing using `bcryptjs` (10 salt rounds).
@@ -40,8 +41,9 @@ SpatialDev merges the real-time community hierarchy of **Discord** (*Servers ➔
    - Strict authorization checks ensure users can **only edit or delete their own posts**, and only the original post author can accept an answer (`403 Forbidden` returned otherwise).
 
 ### B. Stretch Goals & Custom Spatial UI Innovations
+
 - **VisionOS 3D Spatial Choreography:**
-  - **Left Floating Dock & Collapsible Server Monogram Bar:** Clicking the *My Joined Servers* button rotates the indicator arrow (`▸` to `▾`) and slides out an adjacent vertical glass dock displaying circular server monograms (`PC`, `FS`, `CP`).
+  - **Left Floating Dock & Collapsible Server Monogram Bar:** Clicking the _My Joined Servers_ button rotates the indicator arrow (`▸` to `▾`) and slides out an adjacent vertical glass dock displaying circular server monograms (`PC`, `FS`, `CP`).
   - **3D Perspective Right Wing Panel (`rotateY(-14deg)`):** Clicking any group opens its live member chat and Q&A thread on the angled right spatial wing.
   - **Dynamic Center Stage Focus Swap:** Clicking the Right Wing panel smoothly glides it to Center Stage (`rotateY(0deg)`), while collapsing the previous Center Groups panel into a third vertical Group Monogram sidebar on the left.
   - **Customizable Spatial Environment:** Switch between preset architectural backgrounds or paste any custom wallpaper URL in Settings.
@@ -59,13 +61,13 @@ SpatialDev merges the real-time community hierarchy of **Discord** (*Servers ➔
 
 A key architectural decision in **SpatialDev** is combining **PostgreSQL** and **MongoDB** (**Polyglot Persistence**), choosing each database engine for the exact data workload it handles best:
 
-| Layer | Technology | Architectural Role & Justification |
-| :--- | :--- | :--- |
-| **Frontend** | Next.js (App Router), React, Tailwind CSS, Lucide Icons | Provides fast rendering, reactive state machine transitions for the 3-panel spatial layout, and hardware-accelerated CSS 3D transforms. |
-| **Backend** | Node.js (ES Modules), Express.js, Socket.io | Decoupled REST API server paired with a persistent stateful WebSocket server for real-time room broadcasting. |
-| **Relational DB** | **PostgreSQL** (Neon Cloud, raw SQL via `pg.Pool`) | Stores structured, transactional entities (`users`, `servers`, `server_members`, `groups`, `posts`, `comments`, `votes`). Guarantees ACID compliance during voting/reputation updates and leverages native `TEXT[]` arrays with `GIN` indexing. |
-| **Document DB** | **MongoDB Atlas** (`Mongoose`) | Stores high-write, unstructured event streams (`GroupMessage` live chat logs and `Notification` payloads), offloading ephemeral traffic from core relational tables. |
-| **Security & CI** | `bcryptjs`, `jsonwebtoken`, `Zod`, GitHub Actions | Enforces salted password hashing, stateless JWT verification, strict schema validation, and continuous integration build checks. |
+| Layer             | Technology                                              | Architectural Role & Justification                                                                                                                                                                                                              |
+| :---------------- | :------------------------------------------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Frontend**      | Next.js (App Router), React, Tailwind CSS, Lucide Icons | Provides fast rendering, reactive state machine transitions for the 3-panel spatial layout, and hardware-accelerated CSS 3D transforms.                                                                                                         |
+| **Backend**       | Node.js (ES Modules), Express.js, Socket.io             | Decoupled REST API server paired with a persistent stateful WebSocket server for real-time room broadcasting.                                                                                                                                   |
+| **Relational DB** | **PostgreSQL** (Neon Cloud, raw SQL via `pg.Pool`)      | Stores structured, transactional entities (`users`, `servers`, `server_members`, `groups`, `posts`, `comments`, `votes`). Guarantees ACID compliance during voting/reputation updates and leverages native `TEXT[]` arrays with `GIN` indexing. |
+| **Document DB**   | **MongoDB Atlas** (`Mongoose`)                          | Stores high-write, unstructured event streams (`GroupMessage` live chat logs and `Notification` payloads), offloading ephemeral traffic from core relational tables.                                                                            |
+| **Security & CI** | `bcryptjs`, `jsonwebtoken`, `Zod`, GitHub Actions       | Enforces salted password hashing, stateless JWT verification, strict schema validation, and continuous integration build checks.                                                                                                                |
 
 ---
 
@@ -123,12 +125,14 @@ A key architectural decision in **SpatialDev** is combining **PostgreSQL** and *
 ```
 
 ### 2. Custom PostgreSQL Indexes Created
+
 - `idx_posts_group_newest` ON `posts(group_id, created_at DESC)` — Optimizes sorting group feeds by `newest`.
 - `idx_posts_group_top` ON `posts(group_id, score DESC)` — Optimizes sorting group feeds by `top`.
 - `idx_posts_tags_gin` ON `posts USING GIN (tags)` — Inverted index enabling fast `ANY(tags)` array lookups.
 - `idx_comments_post` ON `comments(post_id, score DESC, created_at ASC)` — Speeds up rendering answers ordered by score.
 
 ### 3. MongoDB Document Schemas (`server/src/models/`)
+
 - **`GroupMessage` (`groupmessages` collection):**
   `{ groupId: Number, senderId: Number, senderUsername: String, content: String, codeSnippet: String, createdAt: Date }`
 - **`Notification` (`notifications` collection):**
@@ -139,63 +143,72 @@ A key architectural decision in **SpatialDev** is combining **PostgreSQL** and *
 ## 📡 API Endpoints Documentation
 
 ### 1. Authentication & Developer Profiles (`/api/auth`)
-| Method | Endpoint | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/api/auth/register` | Public | Register a new developer, hash password with `bcrypt`, return JWT + cookie |
-| `POST` | `/api/auth/login` | Public | Verify credentials and issue signed JWT (`HttpOnly` cookie + JSON token) |
-| `POST` | `/api/auth/logout` | Public | Clear session cookie |
-| `GET` | `/api/auth/me` | Auth Required | Get currently authenticated user's profile details |
-| `GET` | `/api/auth/profile/:username` | Public | Get developer's public profile, `skills[]`, reputation, recent posts & answers |
-| `PUT` | `/api/auth/profile` | Auth Required | Update own `bio`, `skills` array, or `avatar_url` |
+
+| Method | Endpoint                      | Access        | Description                                                                    |
+| :----- | :---------------------------- | :------------ | :----------------------------------------------------------------------------- |
+| `POST` | `/api/auth/register`          | Public        | Register a new developer, hash password with `bcrypt`, return JWT + cookie     |
+| `POST` | `/api/auth/login`             | Public        | Verify credentials and issue signed JWT (`HttpOnly` cookie + JSON token)       |
+| `POST` | `/api/auth/logout`            | Public        | Clear session cookie                                                           |
+| `GET`  | `/api/auth/me`                | Auth Required | Get currently authenticated user's profile details                             |
+| `GET`  | `/api/auth/profile/:username` | Public        | Get developer's public profile, `skills[]`, reputation, recent posts & answers |
+| `PUT`  | `/api/auth/profile`           | Auth Required | Update own `bio`, `skills` array, or `avatar_url`                              |
 
 ### 2. Servers, Groups, Live Chat & Global Search (`/api/servers`)
-| Method | Endpoint | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/api/servers` | Public / Optional Auth | Fetch all discoverable servers + logged-in user's joined servers |
-| `POST` | `/api/servers` | Auth Required | Create a new server, add creator as `OWNER`, and seed `#general` group |
-| `POST` | `/api/servers/:serverId/join` | Auth Required | Join a server (`INSERT ... ON CONFLICT DO NOTHING`) |
-| `GET` | `/api/servers/:serverId/groups` | Public | List all groups inside a server with post counts |
-| `POST` | `/api/servers/:serverId/groups` | Auth Required | Create a new discussion/Q&A group inside a server |
-| `GET` | `/api/servers/groups/:groupId/chat` | Public | Fetch last 100 live chat messages for a group from MongoDB |
-| `GET` | `/api/servers/search?q=<query>` | Public | Global Omni-Search across Developers, Servers, Groups, and Posts |
-| `GET` | `/api/servers/notifications` | Auth Required | Fetch user's recent notifications from MongoDB |
+
+| Method | Endpoint                            | Access                 | Description                                                            |
+| :----- | :---------------------------------- | :--------------------- | :--------------------------------------------------------------------- |
+| `GET`  | `/api/servers`                      | Public / Optional Auth | Fetch all discoverable servers + logged-in user's joined servers       |
+| `POST` | `/api/servers`                      | Auth Required          | Create a new server, add creator as `OWNER`, and seed `#general` group |
+| `POST` | `/api/servers/:serverId/join`       | Auth Required          | Join a server (`INSERT ... ON CONFLICT DO NOTHING`)                    |
+| `GET`  | `/api/servers/:serverId/groups`     | Public                 | List all groups inside a server with post counts                       |
+| `POST` | `/api/servers/:serverId/groups`     | Auth Required          | Create a new discussion/Q&A group inside a server                      |
+| `GET`  | `/api/servers/groups/:groupId/chat` | Public                 | Fetch last 100 live chat messages for a group from MongoDB             |
+| `GET`  | `/api/servers/search?q=<query>`     | Public                 | Global Omni-Search across Developers, Servers, Groups, and Posts       |
+| `GET`  | `/api/servers/notifications`        | Auth Required          | Fetch user's recent notifications from MongoDB                         |
 
 ### 3. Posts, Answers, Atomic Voting & Accepted Answers (`/api/posts`)
-| Method | Endpoint | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/api/posts?groupId=&tag=&search=&sort=` | Public | Fetch posts filtered by group, tag, or keyword and sorted by `newest` or `top` |
-| `GET` | `/api/posts/:postId` | Public | Fetch single question and all answers (Accepted Answer pinned first) |
-| `POST` | `/api/posts` | Auth Required | Create a new question with Markdown body, code blocks, and tags |
-| `PUT` | `/api/posts/:postId` | **Author Only** | Edit own post's title, Markdown content, or tags |
-| `DELETE` | `/api/posts/:postId` | **Author Only** | Permanently delete own post |
-| `POST` | `/api/posts/:postId/comments` | Auth Required | Add a Markdown answer to a post and dispatch a MongoDB notification |
-| `PATCH` | `/api/posts/:postId/accept/:commentId` | **Author Only** | Mark an answer as Accepted and award `+15` reputation to the responder |
-| `POST` | `/api/posts/vote` | Auth Required | Atomic PostgreSQL transaction (`BEGIN...COMMIT`) to upvote/downvote post or comment |
+
+| Method   | Endpoint                                 | Access          | Description                                                                         |
+| :------- | :--------------------------------------- | :-------------- | :---------------------------------------------------------------------------------- |
+| `GET`    | `/api/posts?groupId=&tag=&search=&sort=` | Public          | Fetch posts filtered by group, tag, or keyword and sorted by `newest` or `top`      |
+| `GET`    | `/api/posts/:postId`                     | Public          | Fetch single question and all answers (Accepted Answer pinned first)                |
+| `POST`   | `/api/posts`                             | Auth Required   | Create a new question with Markdown body, code blocks, and tags                     |
+| `PUT`    | `/api/posts/:postId`                     | **Author Only** | Edit own post's title, Markdown content, or tags                                    |
+| `DELETE` | `/api/posts/:postId`                     | **Author Only** | Permanently delete own post                                                         |
+| `POST`   | `/api/posts/:postId/comments`            | Auth Required   | Add a Markdown answer to a post and dispatch a MongoDB notification                 |
+| `PATCH`  | `/api/posts/:postId/accept/:commentId`   | **Author Only** | Mark an answer as Accepted and award `+15` reputation to the responder              |
+| `POST`   | `/api/posts/vote`                        | Auth Required   | Atomic PostgreSQL transaction (`BEGIN...COMMIT`) to upvote/downvote post or comment |
 
 ---
 
 ## 💻 Local Setup & Run Instructions
 
 ### Prerequisites
+
 - **Node.js** `v18+` or `v20+`
 - A free **PostgreSQL** connection string from [Neon.tech](https://neon.tech)
 - A free **MongoDB** connection string from [MongoDB Atlas](https://www.mongodb.com/atlas)
 
 ### Step 1: Clone the Repository
+
 ```bash
 git clone https://github.com/sufiyan191/pclub_dev_community_ps.git
 cd pclub_dev_community_ps
 ```
 
 ### Step 2: Initialize the PostgreSQL Schema
+
 Open your **Neon.tech SQL Editor**, copy the contents of `server/src/config/schema.sql`, and click **Run** to create the 7 relational tables and performance indexes.
 
 ### Step 3: Configure & Start the Backend Server (`server/`)
+
 ```bash
 cd server
 npm install
 ```
+
 Create a `.env` file inside the `server/` directory (never commit `.env` secrets):
+
 ```env
 PORT=5000
 CLIENT_URL=http://localhost:3000
@@ -204,23 +217,32 @@ MONGO_URI=mongodb+srv://<username>:<password>@<your-atlas-cluster>.mongodb.net/s
 JWT_SECRET=your_super_secret_jwt_signing_key_here
 NODE_ENV=development
 ```
+
 Start the backend server (automatically seeds initial communities `PC`, `FS`, and `CP` on first run):
+
 ```bash
 npm run dev
 ```
 
 ### Step 4: Configure & Start the Spatial Frontend (`client/`)
+
 Open a second terminal window:
+
 ```bash
 cd client
 npm install
 ```
+
 Create a `.env.local` file inside the `client/` directory:
+
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:5000
 ```
+
 Start the Next.js development server:
+
 ```bash
 npm run dev
 ```
+
 Open **`http://localhost:3000`** in your browser to explore the Spatial Developer Platform!
