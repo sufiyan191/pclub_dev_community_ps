@@ -100,6 +100,10 @@ export const getServers = async (req, res) => {
 export const joinServer = async (req, res) => {
   try {
     const { serverId } = req.params;
+    const exists = await query('SELECT 1 FROM servers WHERE id = $1', [serverId]);
+    if (exists.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Server not found.' });
+    }
     await query(
       `INSERT INTO server_members (server_id, user_id, role)
        VALUES ($1, $2, 'MEMBER')
@@ -136,6 +140,15 @@ export const createGroup = async (req, res) => {
   try {
     const { serverId } = req.params;
     const { name, description = '' } = createGroupSchema.parse(req.body);
+
+    // Only members of a server may add groups to it.
+    const member = await query(
+      'SELECT 1 FROM server_members WHERE server_id = $1 AND user_id = $2',
+      [serverId, req.user.id]
+    );
+    if (member.rows.length === 0) {
+      return res.status(403).json({ success: false, message: 'Join this server before creating groups in it.' });
+    }
 
     const result = await query(
       `INSERT INTO groups (server_id, name, description)
@@ -204,5 +217,14 @@ export const getNotifications = async (req, res) => {
     return res.status(200).json({ success: true, notifications });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Error fetching notifications.' });
+  }
+};
+// 9. MARK ALL MY NOTIFICATIONS AS READ (POST /api/servers/notifications/read)
+export const markNotificationsRead = async (req, res) => {
+  try {
+    await Notification.updateMany({ recipientUserId: req.user.id, isRead: false }, { isRead: true });
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Error updating notifications.' });
   }
 };
