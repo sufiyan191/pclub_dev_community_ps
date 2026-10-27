@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import pool, { query } from '../config/postgres.js';
 import { Notification } from '../models/Notification.js';
+import { pushToUser } from '../config/socket.js';
 
 const postSchema = z.object({
   group_id: z.number().int(),
@@ -8,6 +9,12 @@ const postSchema = z.object({
   body_markdown: z.string().min(10),
   tags: z.array(z.string().max(25)).max(6).optional(),
 });
+
+// Edit accepts any subset of the post fields, but each one must still pass the same rules as creation.
+const updatePostSchema = postSchema
+  .omit({ group_id: true })
+  .partial()
+  .refine((d) => Object.keys(d).length > 0, { message: 'Nothing to update.' });
 
 const commentSchema = z.object({
   body_markdown: z.string().min(2),
@@ -18,6 +25,15 @@ const voteSchema = z.object({
   target_id: z.number().int(),
   vote_value: z.union([z.literal(1), z.literal(-1)]),
 });
+
+// Store a notification in MongoDB, then push it to the recipient if they are online.
+const notify = async (data) => {
+  const saved = await Notification.create(data);
+  pushToUser(data.recipientUserId, 'notification', saved);
+};
+
+// Reputation a single vote is worth to the author of the voted item.
+const repForVote = (value) => (value === 1 ? 5 : value === -1 ? -2 : 0);
 
 // 1. GET POSTS FEED (Supports groupId, tag, search, and sort='newest'|'top')
 export const getPostsFeed = async (req, res) => {
@@ -136,7 +152,7 @@ export const createPost = async (req, res) => {
 export const updatePost = async (req, res) => {
   try {
     const { postId } = req.params;
-    const { title, body_markdown, tags } = req.body;
+    const { title, body_markdown, tags } = updatePostSchema.parse(req.body);
 
     const existing = await query('SELECT author_id FROM posts WHERE id = $1', [postId]);
     if (existing.rows.length === 0) {
@@ -158,11 +174,14 @@ export const updatePost = async (req, res) => {
            tags = COALESCE($3, tags),
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $4 RETURNING *`,
-      [title ?? null, body_markdown ?? null, tags ?? null, postId]
+      [title ?? null, body_markdown ?? null, tags ? tags.map((t) => t.toLowerCase().trim()) : null, postId]
     );
 
     return res.status(200).json({ success: true, post: updated.rows[0] });
   } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ success: false, errors: error.errors });
+    }
     return res.status(500).json({ success: false, message: 'Error updating post.' });
   }
 };
@@ -211,7 +230,7 @@ export const addComment = async (req, res) => {
     // Save Notification in MongoDB if someone else replied to the author's post
     const post = postRes.rows[0];
     if (post.author_id !== req.user.id) {
-      await Notification.create({
+      await notify({
         recipientUserId: post.author_id,
         actorUsername: req.user.username,
         type: 'COMMENT_ADDED',
@@ -273,7 +292,7 @@ export const markAcceptedAnswer = async (req, res) => {
     if (commentAuthorId !== req.user.id) {
       await client.query('UPDATE users SET reputation = reputation + 15 WHERE id = $1', [commentAuthorId]);
 
-      await Notification.create({
+      await notify({
         recipientUserId: commentAuthorId,
         actorUsername: req.user.username,
         type: 'ANSWER_ACCEPTED',
@@ -301,54 +320,65 @@ export const castVote = async (req, res) => {
 
     await client.query('BEGIN');
 
-    // Check if the user has already voted on this item
+    // Lock the target row first. This rejects votes on things that do not exist
+    // and serialises concurrent votes on the same item.
+    const targetRes = await client.query(
+      `SELECT id, author_id FROM ${table} WHERE id = $1 FOR UPDATE`,
+      [target_id]
+    );
+    if (targetRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'That post or answer no longer exists.' });
+    }
+    const authorId = targetRes.rows[0].author_id;
+
     const existingVoteRes = await client.query(
       'SELECT id, vote_value FROM votes WHERE user_id = $1 AND target_type = $2 AND target_id = $3',
       [req.user.id, target_type, target_id]
     );
 
-    let scoreDelta = 0;
+    const previousValue = existingVoteRes.rows[0]?.vote_value ?? 0;
+    let nextValue;
 
-    if (existingVoteRes.rows.length === 0) {
-      // Case 1: Brand new vote (+1 or -1)
+    if (previousValue === 0) {
+      // Brand new vote
       await client.query(
         'INSERT INTO votes (user_id, target_type, target_id, vote_value) VALUES ($1, $2, $3, $4)',
         [req.user.id, target_type, target_id, vote_value]
       );
-      scoreDelta = vote_value;
+      nextValue = vote_value;
+    } else if (previousValue === vote_value) {
+      // Clicking the same button again removes the vote
+      await client.query('DELETE FROM votes WHERE id = $1', [existingVoteRes.rows[0].id]);
+      nextValue = 0;
     } else {
-      const currentVote = existingVoteRes.rows[0];
-      if (currentVote.vote_value === vote_value) {
-        // Case 2: Clicking the same vote button again toggles/removes the vote
-        await client.query('DELETE FROM votes WHERE id = $1', [currentVote.id]);
-        scoreDelta = -vote_value;
-      } else {
-        // Case 3: Switching from Upvote (+1) to Downvote (-1) or vice-versa -> Net swing of 2!
-        await client.query('UPDATE votes SET vote_value = $1 WHERE id = $2', [vote_value, currentVote.id]);
-        scoreDelta = vote_value * 2;
-      }
+      // Switching direction
+      await client.query('UPDATE votes SET vote_value = $1 WHERE id = $2', [vote_value, existingVoteRes.rows[0].id]);
+      nextValue = vote_value;
     }
 
-    // Atomically update the score on the post or comment
-    const updatedTarget = await client.query(
-      `UPDATE ${table} SET score = score + $1 WHERE id = $2 RETURNING score, author_id`,
+    const scoreDelta = nextValue - previousValue;
+
+    const updated = await client.query(
+      `UPDATE ${table} SET score = score + $1 WHERE id = $2 RETURNING score`,
       [scoreDelta, target_id]
     );
 
-    // Update author's reputation (+5 for upvote, -2 for downvote)
-    if (updatedTarget.rows.length > 0 && updatedTarget.rows[0].author_id !== req.user.id) {
-      const repChange = scoreDelta > 0 ? 5 : -2;
-      await client.query('UPDATE users SET reputation = reputation + $1 WHERE id = $2', [
-        repChange,
-        updatedTarget.rows[0].author_id,
-      ]);
+    // Reputation follows the vote's state, not the direction of the last click:
+    // moving from "up" to "none" takes back the +5, so up/undo cycles can never farm points.
+    if (authorId !== req.user.id) {
+      const repChange = repForVote(nextValue) - repForVote(previousValue);
+      if (repChange !== 0) {
+        await client.query('UPDATE users SET reputation = reputation + $1 WHERE id = $2', [repChange, authorId]);
+      }
     }
 
     await client.query('COMMIT');
     return res.status(200).json({
       success: true,
-      newScore: updatedTarget.rows[0]?.score ?? 0,
+      newScore: updated.rows[0].score,
       scoreDelta,
+      myVote: nextValue,
     });
   } catch (error) {
     await client.query('ROLLBACK');

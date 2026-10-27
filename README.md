@@ -44,14 +44,16 @@ SpatialDev merges the real-time community hierarchy of **Discord** (_Servers ➔
 
 - **VisionOS 3D Spatial Choreography:**
   - **Left Floating Dock & Collapsible Server Monogram Bar:** Clicking the _My Joined Servers_ button rotates the indicator arrow (`▸` to `▾`) and slides out an adjacent vertical glass dock displaying circular server monograms (`PC`, `FS`, `CP`).
-  - **3D Perspective Right Wing Panel (`rotateY(-14deg)`):** Clicking any group opens its live member chat and Q&A thread on the angled right spatial wing.
-  - **Dynamic Center Stage Focus Swap:** Clicking the Right Wing panel smoothly glides it to Center Stage (`rotateY(0deg)`), while collapsing the previous Center Groups panel into a third vertical Group Monogram sidebar on the left.
+  - **3D Perspective Right Wing Panel (`rotateY(12deg)`, far edge recedes like the visionOS reference):** Clicking any group opens its live member chat and Q&A thread on the angled right spatial wing.
+  - **Dynamic Center Stage Focus Swap:** Clicking the Right Wing panel smoothly glides it to Center Stage (`rotateY(0deg)`) with one continuous CSS transition (both panels stay mounted), while collapsing the previous Center Groups panel into a third vertical Group Monogram sidebar on the left.
   - **Customizable Spatial Environment:** Switch between preset architectural backgrounds or paste any custom wallpaper URL in Settings.
 - **Real-Time Group Chat & Live Notifications (`Socket.io` + MongoDB):**
   - Instant room-based WebSocket messaging (`join_group`, `send_group_message`) with live code-snippet attachments persisted in MongoDB.
   - Real-time notification badges triggered when another developer answers your post or marks your answer as Accepted.
 - **Automated Reputation Engine:**
   - `+15 Rep` for an Accepted Answer, `+5 Rep` per upvote received, and `-2 Rep` per downvote.
+- **Responsive layout:** below 1024px the workspace shows one panel at a time (groups, then chat) with the same slide transition, the bottom dock becomes the main navigation, and servers open as a horizontal strip.
+- **Live socket security:** the Socket.io connection is authenticated with the same JWT as the REST API; sender identity comes from the token, never from the client payload.
 - **CI Pipeline (GitHub Actions):**
   - Automated workflow (`.github/workflows/ci.yml`) that checks backend syntax and runs a full production Next.js build (`npm run build`) on every push and pull request.
 

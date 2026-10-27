@@ -1,1403 +1,698 @@
 "use client";
-import React, { useState, useEffect, useRef } from "react";
-import {
-  Home,
-  Search,
-  Bell,
-  Plus,
-  Settings,
-  ChevronRight,
-  Maximize2,
-  Minimize2,
-  Send,
-  ThumbsUp,
-  ThumbsDown,
-  CheckCircle2,
-  Hash,
-  MessageSquare,
-  Code2,
-  Sparkles,
-  LogIn,
-  LogOut,
-  Trash2,
-  Edit3,
-  Users,
-  Bookmark,
-  Layers,
-} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
-import { apiRequest, renderMarkdownElements } from "../lib/api";
+import { apiRequest, getToken, TOKEN_KEY } from "../lib/api";
+import { useMediaQuery } from "../lib/hooks";
+import TopBar from "../components/TopBar";
+import PrimaryDock from "../components/PrimaryDock";
+import { ServerRail, ServerStrip } from "../components/ServerRail";
+import GroupRail from "../components/GroupRail";
+import GroupsPanel from "../components/GroupsPanel";
+import ChatPanel from "../components/ChatPanel";
+import BottomDock from "../components/BottomDock";
+import NotificationsPopover from "../components/NotificationsPopover";
 import SpatialModals from "../components/SpatialModals";
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+const DEFAULT_BG =
+  "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2000&q=80";
 
 export default function SpatialWorkspacePage() {
-  // 1. User & Environment State
+  const isDesktop = useMediaQuery("(min-width: 1024px)");
+
+  // ----- who is here, and what the room looks like
   const [currentUser, setCurrentUser] = useState(null);
-  const [bgImage, setBgImage] = useState(
-    "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2000&q=80",
-  );
+  const [bgImage, setBgImage] = useState(DEFAULT_BG);
 
-  // 2. Spatial Navigation Choreography State (Your Exact Discord + VisionOS Spec)
-  const [isServersExpanded, setIsServersExpanded] = useState(true); // Controls ▸ vs ▾ arrow & Server Monogram Bar
-  const [focusedStage, setFocusedStage] = useState("GROUPS_IN_CENTER"); // 'GROUPS_IN_CENTER' | 'CHAT_IN_CENTER'
-  const [rightPanelTab, setRightPanelTab] = useState("LIVE_CHAT"); // 'LIVE_CHAT' | 'QA_THREAD'
+  // ----- layout state machine
+  const [view, setView] = useState("server"); // "home" (all servers) | "server"
+  const [stage, setStage] = useState("groups"); // which panel owns the centre: "groups" | "chat"
+  const [tab, setTab] = useState("chat"); // inside the chat panel: "chat" | "qa"
+  const [isServersOpen, setIsServersOpen] = useState(false);
 
-  // 3. Data State (Servers, Groups, Posts, Comments, Live Chat, Notifications)
+  // ----- servers and groups
   const [allServers, setAllServers] = useState([]);
   const [joinedServers, setJoinedServers] = useState([]);
   const [activeServer, setActiveServer] = useState(null);
-  const [serverGroups, setServerGroups] = useState([]);
+  const [groups, setGroups] = useState([]);
   const [activeGroup, setActiveGroup] = useState(null);
 
-  // Posts & Feed Filtering (PS 06 Core Requirements)
+  // ----- questions
   const [posts, setPosts] = useState([]);
-  const [feedSort, setFeedSort] = useState("newest"); // 'newest' | 'top'
+  const [postsLoading, setPostsLoading] = useState(false);
+  const [postsVersion, setPostsVersion] = useState(0);
+  const [feedSort, setFeedSort] = useState("newest");
   const [selectedTag, setSelectedTag] = useState("");
   const [activePost, setActivePost] = useState(null);
-  const [postComments, setPostComments] = useState([]);
+  const [comments, setComments] = useState([]);
+  const [answerInput, setAnswerInput] = useState("");
   const [editingPost, setEditingPost] = useState(null);
 
-  // Live Group Chat (MongoDB + Socket.io)
-  const [groupMessages, setGroupMessages] = useState([]);
+  // ----- live chat
+  const [messages, setMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [codeInput, setCodeInput] = useState("");
-  const [showCodeBox, setShowCodeBox] = useState(false);
-  const [answerInput, setAnswerInput] = useState("");
+  const [showCode, setShowCode] = useState(false);
+  const [chatError, setChatError] = useState("");
 
-  // Omni-Search & Notifications
+  // ----- search, notifications, overlays
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState(null);
   const [notifications, setNotifications] = useState([]);
-  const [showNotifications, setShowNotifications] = useState(false);
-
-  // Modals & Profile Viewer
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [activeModal, setActiveModal] = useState(null);
   const [viewedProfile, setViewedProfile] = useState(null);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [toast, setToast] = useState("");
 
   const socketRef = useRef(null);
-  const chatEndRef = useRef(null);
+  const activeGroupRef = useRef(null);
+  const groupRequest = useRef(0);
+  const searchInputRef = useRef(null);
+  const toastTimer = useRef(null);
 
-  // Initial Boot: Load Saved Wallpaper, Current User, and Servers
-  useEffect(() => {
-    const savedBg = localStorage.getItem("spatial_bg");
-    if (savedBg) setBgImage(savedBg);
-
-    fetchInitialWorkspace();
-
-    // Connect Socket.io
-    socketRef.current = io(SOCKET_URL, { withCredentials: true });
-    socketRef.current.on("new_group_message", (msg) => {
-      setGroupMessages((prev) => [...prev, msg]);
-    });
-
-    return () => {
-      socketRef.current?.disconnect();
-    };
+  const showToast = useCallback((message) => {
+    setToast(message);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(""), 4000);
   }, []);
 
-  const fetchInitialWorkspace = async () => {
+  const closeModal = useCallback(() => setActiveModal(null), []);
+  const refreshPosts = () => setPostsVersion((v) => v + 1);
+
+  // ---------------------------------------------------------------- data loading
+
+  const loadServers = async () => {
+    const res = await apiRequest("/api/servers");
+    setAllServers(res.allServers || []);
+    setJoinedServers(res.joinedServers || []);
+    return res;
+  };
+
+  const loadNotifications = async () => {
     try {
-      // Check if logged in
-      const token = localStorage.getItem("spatial_token");
-      if (token) {
-        try {
-          const meRes = await apiRequest("/api/auth/me");
-          setCurrentUser(meRes.user);
-          const notifRes = await apiRequest("/api/servers/notifications");
-          setNotifications(notifRes.notifications || []);
-        } catch {
-          localStorage.removeItem("spatial_token");
-        }
-      }
-
-      const srvRes = await apiRequest("/api/servers");
-      setAllServers(srvRes.allServers || []);
-      setJoinedServers(
-        srvRes.joinedServers?.length
-          ? srvRes.joinedServers
-          : srvRes.allServers || [],
-      );
-
-      if (srvRes.allServers?.length > 0 && !activeServer) {
-        handleSelectServer(srvRes.allServers[0]);
-      }
-    } catch (err) {
-      console.error("Workspace Init Error:", err.message);
+      const res = await apiRequest("/api/servers/notifications");
+      setNotifications(res.notifications || []);
+    } catch {
+      /* notifications are a nice-to-have; stay quiet */
     }
   };
 
-  // When a Server is clicked in the Left Monogram Bar -> Load its Groups in Center
-  const handleSelectServer = async (server) => {
-    setActiveServer(server);
-    setFocusedStage("GROUPS_IN_CENTER"); // Bring Groups list to Center Stage
-    try {
-      const grpRes = await apiRequest(`/api/servers/${server.id}/groups`);
-      const groups = grpRes.groups || [];
-      setServerGroups(groups);
-      if (groups.length > 0) {
-        handleSelectGroup(groups[0], false);
-      } else {
-        setActiveGroup(null);
-        setPosts([]);
-      }
-    } catch (err) {
-      console.error("Error loading groups:", err.message);
-    }
+  const reloadGroups = async (server = activeServer) => {
+    if (!server) return [];
+    const res = await apiRequest(`/api/servers/${server.id}/groups`);
+    setGroups(res.groups || []);
+    return res.groups || [];
   };
 
-  // When a Group is clicked -> Load its Posts & open its People Chat on the Right Spatial Wing!
-  const handleSelectGroup = async (group, bringChatToCenter = false) => {
+  const clearGroup = () => {
+    if (activeGroupRef.current) socketRef.current?.emit("leave_group", activeGroupRef.current.id);
+    activeGroupRef.current = null;
+    groupRequest.current += 1;
+    setActiveGroup(null);
+    setMessages([]);
+    setActivePost(null);
+    setComments([]);
+  };
+
+  // Opening a group: join its socket room, load its chat, reset anything that belonged to the last group.
+  const openGroup = async (group, { focus = false, auto = false } = {}) => {
+    const request = ++groupRequest.current;
+    activeGroupRef.current = group;
     setActiveGroup(group);
-    if (bringChatToCenter) {
-      setFocusedStage("CHAT_IN_CENTER");
-    }
-
-    // Join WebSocket room for this Group
+    setSelectedTag("");
+    setMessages([]);
+    setActivePost(null);
+    setComments([]);
+    setChatError("");
+    setTab("chat");
     socketRef.current?.emit("join_group", group.id);
+    // Phones only show one panel, so choosing a group takes you to its chat.
+    if (!auto && (focus || !isDesktop)) setStage("chat");
 
     try {
-      const [postsRes, chatRes] = await Promise.all([
-        apiRequest(
-          `/api/posts?groupId=${group.id}&sort=${feedSort}${selectedTag ? `&tag=${selectedTag}` : ""}`,
-        ),
-        apiRequest(`/api/servers/groups/${group.id}/chat`),
-      ]);
-
-      const fetchedPosts = postsRes.posts || [];
-      setPosts(fetchedPosts);
-      setGroupMessages(chatRes.messages || []);
-
-      if (fetchedPosts.length > 0) {
-        handleSelectPost(fetchedPosts[0]);
-      } else {
-        setActivePost(null);
-        setPostComments([]);
-      }
+      const res = await apiRequest(`/api/servers/groups/${group.id}/chat`);
+      if (request === groupRequest.current) setMessages(res.messages || []);
     } catch (err) {
-      console.error("Error selecting group:", err.message);
+      if (request === groupRequest.current) showToast(err.message);
     }
   };
 
-  // Reload posts when sort ('newest' vs 'top') or tag filter changes
-  useEffect(() => {
-    if (!activeGroup) return;
-    apiRequest(
-      `/api/posts?groupId=${activeGroup.id}&sort=${feedSort}${selectedTag ? `&tag=${selectedTag}` : ""}`,
-    )
-      .then((res) => setPosts(res.posts || []))
-      .catch(() => {});
-  }, [feedSort, selectedTag]);
+  const openServer = async (server, { groupId } = {}) => {
+    setView("server");
+    setActiveServer(server);
+    setStage("groups");
+    try {
+      const list = await reloadGroups(server);
+      const target = list.find((g) => g.id === groupId) || list[0];
+      if (target) await openGroup(target, { auto: true });
+      else clearGroup();
+    } catch (err) {
+      showToast(err.message);
+    }
+  };
 
-  // Load a specific Post's Answers/Comments for the Q&A Thread tab
-  const handleSelectPost = async (post) => {
+  const openHome = () => {
+    clearGroup();
+    setView("home");
+    setActiveServer(null);
+    setGroups([]);
+    setSelectedTag("");
+    setStage("groups");
+    setSearchResults(null);
+    setSearchQuery("");
+  };
+
+  const openPost = async (post, { focus = false } = {}) => {
     try {
       const res = await apiRequest(`/api/posts/${post.id}`);
       setActivePost(res.post);
-      setPostComments(res.comments || []);
+      setComments(res.comments || []);
+      setTab("qa");
+      if (focus || !isDesktop) setStage("chat");
     } catch (err) {
-      console.error("Error loading post details:", err.message);
+      showToast(err.message);
     }
   };
 
-  // Global Omni-Search Handler (Top Floating Bar)
+  const reloadActivePost = async (id = activePost?.id) => {
+    if (!id) return;
+    try {
+      const res = await apiRequest(`/api/posts/${id}`);
+      setActivePost(res.post);
+      setComments(res.comments || []);
+    } catch {
+      setActivePost(null);
+      setComments([]);
+    }
+  };
+
+  const openProfile = async (username) => {
+    try {
+      const res = await apiRequest(`/api/auth/profile/${username}`);
+      setViewedProfile(res.profile);
+      setActiveModal("USER_PROFILE");
+    } catch (err) {
+      showToast(err.message);
+    }
+  };
+
+  // ---------------------------------------------------------------- effects
+
+  // First load: wallpaper, session, servers.
   useEffect(() => {
-    const timer = setTimeout(async () => {
-      if (!searchQuery.trim()) {
-        setSearchResults(null);
-        return;
+    try {
+      const saved = localStorage.getItem("spatial_bg");
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reading browser storage after hydration
+      if (saved) setBgImage(saved);
+    } catch {
+      /* storage can be blocked */
+    }
+
+    (async () => {
+      if (getToken()) {
+        try {
+          const me = await apiRequest("/api/auth/me");
+          setCurrentUser(me.user);
+          loadNotifications();
+        } catch {
+          localStorage.removeItem(TOKEN_KEY);
+        }
       }
       try {
-        const res = await apiRequest(
-          `/api/servers/search?q=${encodeURIComponent(searchQuery)}`,
-        );
-        setSearchResults(res);
+        const res = await loadServers();
+        const first = res.joinedServers?.[0] || res.allServers?.[0];
+        if (first) await openServer(first);
       } catch (err) {
+        showToast("Can’t reach the server right now. It may be waking up, so try again in a moment.");
         console.error(err);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // One socket for the page. It reconnects with the right token whenever the signed-in user changes.
+  useEffect(() => {
+    const socket = io(SOCKET_URL, { autoConnect: false, withCredentials: true });
+    socketRef.current = socket;
+
+    socket.on("connect", () => {
+      if (activeGroupRef.current) socket.emit("join_group", activeGroupRef.current.id);
+    });
+    socket.on("new_group_message", (msg) => {
+      if (msg.groupId !== activeGroupRef.current?.id) return;
+      setMessages((prev) => (prev.some((m) => m._id === msg._id) ? prev : [...prev, msg]));
+    });
+    socket.on("notification", (n) => setNotifications((prev) => [n, ...prev]));
+
+    return () => {
+      socket.removeAllListeners();
+      socket.disconnect();
+    };
+  }, []);
+
+  const userId = currentUser?.id;
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    socket.auth = { token: getToken() };
+    if (socket.connected) socket.disconnect();
+    socket.connect();
+  }, [userId]);
+
+  // The questions list follows the group, sort order and tag filter.
+  useEffect(() => {
+    if (view === "server" && !activeGroup) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- no group means no list
+      setPosts([]);
+      return;
+    }
+    let cancelled = false;
+    const params = new URLSearchParams({ sort: feedSort });
+    if (view === "server") params.set("groupId", activeGroup.id);
+    if (selectedTag) params.set("tag", selectedTag);
+
+    setPostsLoading(true);
+    apiRequest(`/api/posts?${params}`)
+      .then((res) => !cancelled && setPosts(res.posts || []))
+      .catch((err) => !cancelled && showToast(err.message))
+      .finally(() => !cancelled && setPostsLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [view, activeGroup, feedSort, selectedTag, postsVersion, showToast]);
+
+  // Debounced search.
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- empty query clears results
+      setSearchResults(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        setSearchResults(await apiRequest(`/api/servers/search?q=${encodeURIComponent(searchQuery.trim())}`));
+      } catch (err) {
+        showToast(err.message);
       }
     }, 250);
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, showToast]);
 
-  // Send Live Chat Message in Right Spatial Panel (Socket.io + MongoDB)
-  const handleSendGroupChat = (e) => {
-    e.preventDefault();
-    if (!chatInput.trim()) return;
-    if (!currentUser) return setActiveModal("AUTH");
+  // Press "/" anywhere to search.
+  useEffect(() => {
+    const onKey = (e) => {
+      const typing = /input|textarea|select/i.test(e.target?.tagName || "") || e.target?.isContentEditable;
+      if (e.key === "/" && !typing) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
-    socketRef.current?.emit("send_group_message", {
-      groupId: activeGroup.id,
-      senderId: currentUser.id,
-      senderUsername: currentUser.username,
-      content: chatInput,
-      codeSnippet: codeInput,
-    });
+  // ---------------------------------------------------------------- actions
 
-    setChatInput("");
-    setCodeInput("");
-    setShowCodeBox(false);
-    setTimeout(
-      () => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }),
-      100,
-    );
+  const requireSignIn = () => setActiveModal("AUTH");
+
+  const clearSearch = () => {
+    setSearchQuery("");
+    setSearchResults(null);
   };
 
-  // Submit Structured Markdown Answer on a Post (PostgreSQL)
-  const handleAddAnswer = async (e) => {
+  const sendChat = (e) => {
     e.preventDefault();
-    if (!answerInput.trim() || !activePost) return;
-    if (!currentUser) return setActiveModal("AUTH");
+    const text = chatInput.trim();
+    if (!text || !activeGroup) return;
+    setChatError("");
+    socketRef.current?.emit(
+      "send_group_message",
+      { groupId: activeGroup.id, content: text, codeSnippet: showCode ? codeInput : "" },
+      (res) => {
+        if (!res?.ok) {
+          setChatError(res?.message || "Could not send that message.");
+          setChatInput(text);
+        }
+      },
+    );
+    setChatInput("");
+    setCodeInput("");
+    setShowCode(false);
+  };
 
+  const submitAnswer = async (e) => {
+    e.preventDefault();
+    if (!activePost || answerInput.trim().length < 2) return;
     try {
       await apiRequest(`/api/posts/${activePost.id}/comments`, {
         method: "POST",
         body: JSON.stringify({ body_markdown: answerInput }),
       });
       setAnswerInput("");
-      await handleSelectPost(activePost);
+      await reloadActivePost();
+      refreshPosts();
     } catch (err) {
-      alert(err.message);
+      showToast(err.message);
     }
   };
 
-  // Upvote / Downvote Handler (Calls Atomic PostgreSQL Transaction)
-  const handleVote = async (target_type, target_id, vote_value) => {
-    if (!currentUser) return setActiveModal("AUTH");
+  const vote = async (target_type, target_id, vote_value) => {
+    if (!currentUser) return requireSignIn();
     try {
       await apiRequest("/api/posts/vote", {
         method: "POST",
         body: JSON.stringify({ target_type, target_id, vote_value }),
       });
-      if (activeGroup) {
-        const postsRes = await apiRequest(
-          `/api/posts?groupId=${activeGroup.id}&sort=${feedSort}`,
-        );
-        setPosts(postsRes.posts || []);
-      }
-      if (activePost) {
-        await handleSelectPost(activePost);
-      }
+      refreshPosts();
+      await reloadActivePost();
     } catch (err) {
-      alert(err.message);
+      showToast(err.message);
     }
   };
 
-  // Mark Accepted Answer (Post Author Only)
-  const handleAcceptAnswer = async (commentId) => {
-    if (!currentUser || !activePost) return;
+  const acceptAnswer = async (commentId) => {
     try {
-      await apiRequest(`/api/posts/${activePost.id}/accept/${commentId}`, {
-        method: "PATCH",
-      });
-      await handleSelectPost(activePost);
+      await apiRequest(`/api/posts/${activePost.id}/accept/${commentId}`, { method: "PATCH" });
+      await reloadActivePost();
+      refreshPosts();
     } catch (err) {
-      alert(err.message);
+      showToast(err.message);
     }
   };
 
-  // Delete Own Post (Access Control Requirement)
-  const handleDeletePost = async (postId) => {
-    if (!confirm("Delete your post permanently?")) return;
+  const askToDeletePost = (post) => {
+    setConfirmAction({
+      title: "Delete this question?",
+      body: "The question and all of its answers will be removed for everyone. This can’t be undone.",
+      confirmLabel: "Delete",
+      run: async () => {
+        try {
+          await apiRequest(`/api/posts/${post.id}`, { method: "DELETE" });
+          if (activePost?.id === post.id) {
+            setActivePost(null);
+            setComments([]);
+          }
+          refreshPosts();
+          reloadGroups().catch(() => {});
+        } catch (err) {
+          showToast(err.message);
+        }
+      },
+    });
+    setActiveModal("CONFIRM");
+  };
+
+  const editPost = (post) => {
+    setEditingPost(post);
+    setActiveModal("EDIT_POST");
+  };
+
+  const joinServer = async (server) => {
+    if (!currentUser) return requireSignIn();
     try {
-      await apiRequest(`/api/posts/${postId}`, { method: "DELETE" });
-      handleSelectGroup(activeGroup);
+      await apiRequest(`/api/servers/${server.id}/join`, { method: "POST" });
+      await loadServers();
+      setIsServersOpen(true);
+      showToast(`You joined ${server.name}.`);
     } catch (err) {
-      alert(err.message);
+      showToast(err.message);
     }
   };
 
-  // Open Any Developer's Profile & Activity Modal
-  const openUserProfile = async (username) => {
+  const handleAuthSuccess = async (user, token) => {
     try {
-      const res = await apiRequest(`/api/auth/profile/${username}`);
-      setViewedProfile(res.profile);
-      setActiveModal("USER_PROFILE");
-    } catch (err) {
-      console.error(err);
+      localStorage.setItem(TOKEN_KEY, token);
+    } catch {
+      /* without storage the cookie still keeps the session */
     }
+    setCurrentUser(user);
+    setActiveModal(null);
+    showToast(`Signed in as @${user.username}.`);
+    await Promise.all([loadServers(), loadNotifications()]);
   };
+
   const handleLogout = async () => {
     await apiRequest("/api/auth/logout", { method: "POST" }).catch(() => {});
-    localStorage.removeItem("spatial_token");
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+    } catch {
+      /* ignore */
+    }
     setCurrentUser(null);
+    setNotifications([]);
+    setActiveModal(null);
+    loadServers().catch(() => {});
   };
 
-  const displayedServers =
-    joinedServers.length > 0 ? joinedServers : allServers;
+  const toggleNotifications = () => {
+    if (notificationsOpen) return closeNotifications();
+    if (!currentUser) return requireSignIn();
+    setNotificationsOpen(true);
+  };
+
+  const closeNotifications = () => {
+    setNotificationsOpen(false);
+    if (notifications.some((n) => !n.isRead)) {
+      apiRequest("/api/servers/notifications/read", { method: "POST" }).catch(() => {});
+      setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    }
+  };
+
+  const openCreate = () => setActiveModal(currentUser ? "CREATE_HUB" : "AUTH");
+
+  const focusSearch = () => {
+    searchInputRef.current?.focus();
+    searchInputRef.current?.select();
+  };
+
+  // ---------------------------------------------------------------- derived
+
+  const joinedIds = new Set(joinedServers.map((s) => s.id));
+  const isMember = Boolean(activeServer && joinedIds.has(activeServer.id));
+  const railServers = currentUser
+    ? activeServer && !isMember
+      ? [...joinedServers, activeServer]
+      : joinedServers
+    : allServers;
+  const hasUnread = notifications.some((n) => !n.isRead);
 
   return (
     <div
-      className="relative w-screen h-screen overflow-hidden select-none bg-zinc-950 text-white font-sans"
-      style={{
-        backgroundImage: `url('${bgImage}')`,
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-      }}
+      className="relative h-dvh w-full overflow-hidden bg-zinc-950 bg-cover bg-center"
+      style={{ backgroundImage: `url(${JSON.stringify(bgImage)})` }}
     >
-      {/* Subtle Ambient Vignette Overlay for Glass Contrast */}
-      <div className="absolute inset-0 bg-black/35 pointer-events-none" />
+      <div className="pointer-events-none absolute inset-0 bg-black/30" aria-hidden="true" />
 
-      {/* =====================================================================
-          1. TOP FLOATING SPATIAL SEARCH BAR (Mirrors Reference Image Top Pill)
-      ====================================================================== */}
-      <header className="relative z-30 pt-5 flex justify-center px-4">
-        <div className="spatial-glass-pill w-full max-w-xl h-14 rounded-full px-4 flex items-center justify-between gap-3">
-          {/* Left Community Brand Icon */}
-          <button
-            onClick={() => setFocusedStage("GROUPS_IN_CENTER")}
-            className="w-9 h-9 rounded-full bg-sky-500 flex items-center justify-center shadow-md shadow-sky-500/40 shrink-0 hover:scale-105 transition"
-            title="Reset Spatial View"
-          >
-            <Code2 className="w-5 h-5 text-white" />
-          </button>
+      <div className="relative z-10 flex h-full flex-col">
+        <TopBar
+          inputRef={searchInputRef}
+          query={searchQuery}
+          onQueryChange={setSearchQuery}
+          results={searchResults}
+          onClearSearch={clearSearch}
+          stage={stage}
+          onToggleStage={() => setStage((s) => (s === "groups" ? "chat" : "groups"))}
+          onHome={openHome}
+          onPickServer={(s) => {
+            clearSearch();
+            openServer(s);
+          }}
+          onPickGroup={(g) => {
+            clearSearch();
+            const server = allServers.find((s) => s.id === g.server_id);
+            if (server) openServer(server, { groupId: g.id }).then(() => !isDesktop && setStage("chat"));
+          }}
+          onPickPerson={(u) => {
+            clearSearch();
+            openProfile(u.username);
+          }}
+          onPickPost={(p) => {
+            clearSearch();
+            openPost(p, { focus: true });
+          }}
+        />
 
-          {/* Center Omni-Search Input */}
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 text-white/50 absolute left-3.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search people, groups, servers, or #tags..."
-              className="w-full pl-9 pr-4 py-1.5 rounded-full bg-black/25 border border-white/15 text-xs text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-            />
+        <ServerStrip
+          open={isServersOpen}
+          servers={railServers}
+          activeServerId={activeServer?.id}
+          onSelect={openServer}
+          onDiscover={() => setActiveModal("DISCOVER")}
+        />
 
-            {/* Live Omni-Search Dropdown Results */}
-            {searchResults && (
-              <div className="absolute top-11 left-0 right-0 spatial-glass rounded-2xl p-3 space-y-3 max-h-80 overflow-y-auto z-50 border border-white/25">
-                <div className="flex justify-between items-center text-[11px] text-white/50 px-1">
-                  <span>GLOBAL OMNI-SEARCH RESULTS</span>
-                  <button
-                    onClick={() => setSearchResults(null)}
-                    className="text-sky-400"
-                  >
-                    Close
-                  </button>
-                </div>
+        <main className="mx-auto flex min-h-0 w-full max-w-[1500px] flex-1 flex-col px-3 pb-[calc(5.5rem+env(safe-area-inset-bottom))] pt-3 lg:flex-row lg:items-center lg:gap-3 lg:px-6 lg:pb-24 lg:pt-4">
+          <PrimaryDock
+            view={view}
+            isServersOpen={isServersOpen}
+            onToggleServers={() => setIsServersOpen((v) => !v)}
+            hasUnread={hasUnread}
+            notificationsOpen={notificationsOpen}
+            onHome={openHome}
+            onSearch={focusSearch}
+            onBell={toggleNotifications}
+            onCreate={openCreate}
+            onSettings={() => setActiveModal("SETTINGS")}
+            currentUser={currentUser}
+            onProfile={() => openProfile(currentUser.username)}
+            onLogin={requireSignIn}
+          />
 
-                {searchResults.servers?.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-bold text-amber-300 uppercase px-1 mb-1">
-                      Servers
-                    </div>
-                    {searchResults.servers.map((s) => (
-                      <div
-                        key={s.id}
-                        onClick={() => {
-                          handleSelectServer(s);
-                          setSearchResults(null);
-                        }}
-                        className="p-2 rounded-xl hover:bg-white/10 cursor-pointer flex items-center gap-2 text-xs"
-                      >
-                        <span className="w-6 h-6 rounded-full bg-white/15 flex items-center justify-center font-bold text-[10px]">
-                          {s.monogram}
-                        </span>
-                        <span>{s.name}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+          <ServerRail
+            open={isServersOpen}
+            servers={railServers}
+            activeServerId={activeServer?.id}
+            onSelect={openServer}
+            onDiscover={() => setActiveModal("DISCOVER")}
+          />
 
-                {searchResults.groups?.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-bold text-emerald-300 uppercase px-1 mb-1">
-                      Groups
-                    </div>
-                    {searchResults.groups.map((g) => (
-                      <div
-                        key={g.id}
-                        onClick={() => {
-                          handleSelectGroup(g, true);
-                          setSearchResults(null);
-                        }}
-                        className="p-2 rounded-xl hover:bg-white/10 cursor-pointer text-xs flex justify-between"
-                      >
-                        <span>#{g.name}</span>
-                        <span className="text-white/40 text-[10px]">
-                          {g.server_name}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+          <GroupRail
+            open={stage === "chat"}
+            groups={groups}
+            activeGroupId={activeGroup?.id}
+            onSelect={(g) => openGroup(g, { focus: true })}
+            onRestore={() => setStage("groups")}
+          />
 
-                {searchResults.people?.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-bold text-sky-300 uppercase px-1 mb-1">
-                      Developers
-                    </div>
-                    {searchResults.people.map((u) => (
-                      <div
-                        key={u.id}
-                        onClick={() => {
-                          openUserProfile(u.username);
-                          setSearchResults(null);
-                        }}
-                        className="p-2 rounded-xl hover:bg-white/10 cursor-pointer text-xs flex justify-between"
-                      >
-                        <span>@{u.username}</span>
-                        <span className="text-amber-300 text-[10px]">
-                          ★ {u.reputation}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
+          <div className="workspace min-h-0 min-w-0 flex-1 lg:h-full lg:max-h-[46rem]" data-stage={stage}>
+            <div className="groups-slot" inert={stage === "chat"}>
+              <GroupsPanel
+                view={view}
+                activeServer={activeServer}
+                isMember={isMember}
+                canJoin={Boolean(activeServer) && !isMember}
+                onJoin={() => joinServer(activeServer)}
+                servers={allServers}
+                groups={groups}
+                activeGroup={activeGroup}
+                onSelectGroup={(g) => openGroup(g)}
+                onSelectServer={openServer}
+                posts={posts}
+                loading={postsLoading}
+                feedSort={feedSort}
+                onSortChange={setFeedSort}
+                selectedTag={selectedTag}
+                onClearTag={() => setSelectedTag("")}
+                onTag={setSelectedTag}
+                activePostId={activePost?.id}
+                onOpenPost={openPost}
+                currentUser={currentUser}
+                onCompose={openCreate}
+                onEditPost={editPost}
+                onDeletePost={askToDeletePost}
+                onVote={vote}
+                onProfile={openProfile}
+              />
+            </div>
 
-                {searchResults.posts?.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-bold text-purple-300 uppercase px-1 mb-1">
-                      Posts & Questions
-                    </div>
-                    {searchResults.posts.map((p) => (
-                      <div
-                        key={p.id}
-                        onClick={() => {
-                          handleSelectPost(p);
-                          setRightPanelTab("QA_THREAD");
-                          setFocusedStage("CHAT_IN_CENTER");
-                          setSearchResults(null);
-                        }}
-                        className="p-2 rounded-xl hover:bg-white/10 cursor-pointer text-xs truncate"
-                      >
-                        {p.title}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+            <div className="chat-slot" inert={!isDesktop && stage === "groups"}>
+              <ChatPanel
+                stage={stage}
+                onFocus={() => setStage("chat")}
+                onBack={() => setStage("groups")}
+                activeGroup={activeGroup}
+                activeServer={activeServer}
+                tab={tab}
+                onTabChange={setTab}
+                messages={messages}
+                chatInput={chatInput}
+                onChatInput={setChatInput}
+                codeInput={codeInput}
+                onCodeInput={setCodeInput}
+                showCode={showCode}
+                onToggleCode={() => setShowCode((v) => !v)}
+                chatError={chatError}
+                onSendChat={sendChat}
+                activePost={activePost}
+                comments={comments}
+                answerInput={answerInput}
+                onAnswerInput={setAnswerInput}
+                onSubmitAnswer={submitAnswer}
+                onAccept={acceptAnswer}
+                onVote={vote}
+                onProfile={openProfile}
+                currentUser={currentUser}
+                onSignIn={requireSignIn}
+              />
+            </div>
           </div>
+        </main>
+      </div>
 
-          {/* Right Action: Swap Focus / Expand Stage Button */}
-          <button
-            onClick={() =>
-              setFocusedStage(
-                focusedStage === "GROUPS_IN_CENTER"
-                  ? "CHAT_IN_CENTER"
-                  : "GROUPS_IN_CENTER",
-              )
-            }
-            className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition shrink-0"
-            title="Swap Center & Right Spatial Panels"
-          >
-            {focusedStage === "GROUPS_IN_CENTER" ? (
-              <Maximize2 className="w-4 h-4 text-white/80" />
-            ) : (
-              <Minimize2 className="w-4 h-4 text-sky-400" />
-            )}
-          </button>
-        </div>
-      </header>
-
-      {/* =====================================================================
-          2. MAIN SPATIAL 3D STAGE (Left Docks + Center Panel + Right Tilted Wing)
-      ====================================================================== */}
-      <main className="spatial-stage relative z-20 flex items-center justify-center gap-4 px-6 pt-4 pb-20 h-[calc(100vh-88px)] max-w-[1600px] mx-auto">
-        {/* -------------------------------------------------------------------
-            A. LEFT FLOATING VERTICAL DOCKS (Primary Dock + Server Bar + Collapsed Group Bar)
-        -------------------------------------------------------------------- */}
-        <div className="flex items-center gap-2.5 shrink-0 h-full max-h-[560px]">
-          {/* Dock 1: Primary Navigation Pill (Home, Search, Notifications, Create, Joined Servers Arrow, Settings) */}
-          <aside className="spatial-glass-pill w-14 py-5 rounded-full flex flex-col items-center justify-between h-full">
-            <div className="flex flex-col items-center gap-4">
-              {/* Home Button */}
-              <button
-                onClick={() => setFocusedStage("GROUPS_IN_CENTER")}
-                className={`w-10 h-10 rounded-full flex items-center justify-center transition ${
-                  focusedStage === "GROUPS_IN_CENTER"
-                    ? "bg-white/25 text-white shadow-inner"
-                    : "text-white/65 hover:text-white hover:bg-white/10"
-                }`}
-                title="Home / Groups View"
-              >
-                <Home className="w-4 h-4" />
-              </button>
-
-              {/* My Joined Servers Toggle (Arrow turns ▸ to ▾ and opens Server Monogram Bar!) */}
-              <button
-                onClick={() => setIsServersExpanded(!isServersExpanded)}
-                className={`w-10 h-10 rounded-full flex flex-col items-center justify-center transition ${
-                  isServersExpanded
-                    ? "bg-sky-500/30 text-sky-300 border border-sky-400/40"
-                    : "text-white/65 hover:bg-white/10"
-                }`}
-                title="My Joined Servers (Toggle Vertical Server Bar)"
-              >
-                <Layers className="w-3.5 h-3.5" />
-                <ChevronRight
-                  className={`w-3.5 h-3.5 transition-transform duration-300 ${
-                    isServersExpanded ? "rotate-90 text-sky-300" : "rotate-0"
-                  }`}
-                />
-              </button>
-
-              {/* Notifications Bell */}
-              <div className="relative">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="w-10 h-10 rounded-full flex items-center justify-center text-white/65 hover:text-white hover:bg-white/10 transition"
-                  title="Notifications"
-                >
-                  <Bell className="w-4 h-4" />
-                  {notifications.length > 0 && (
-                    <span className="w-2 h-2 rounded-full bg-rose-500 absolute top-2 right-2.5" />
-                  )}
-                </button>
-
-                {showNotifications && (
-                  <div className="absolute left-14 top-0 w-72 spatial-glass rounded-2xl p-3 z-50 space-y-2 border border-white/25">
-                    <div className="text-xs font-semibold text-white/80 px-1">
-                      Live Notifications
-                    </div>
-                    {notifications.length === 0 ? (
-                      <div className="text-xs text-white/50 p-2">
-                        No notifications yet.
-                      </div>
-                    ) : (
-                      notifications.map((n) => (
-                        <div
-                          key={n._id}
-                          className="p-2 rounded-xl bg-white/5 text-xs text-white/85"
-                        >
-                          {n.message}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Create Server / Group / Post (+) */}
-              <button
-                onClick={() =>
-                  setActiveModal(currentUser ? "CREATE_HUB" : "AUTH")
-                }
-                className="w-10 h-10 rounded-full bg-sky-500/20 hover:bg-sky-500/40 border border-sky-400/30 flex items-center justify-center text-sky-300 transition"
-                title="Create Server, Group, or Post"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Bottom Icons: Profile / Settings / Auth */}
-            <div className="flex flex-col items-center gap-3">
-              {currentUser ? (
-                <button
-                  onClick={() => openUserProfile(currentUser.username)}
-                  className="w-9 h-9 rounded-full bg-gradient-to-tr from-sky-500 to-indigo-500 text-xs font-bold flex items-center justify-center shadow-md"
-                  title={`Logged in as @${currentUser.username}`}
-                >
-                  {currentUser.username.slice(0, 2).toUpperCase()}
-                </button>
-              ) : (
-                <button
-                  onClick={() => setActiveModal("AUTH")}
-                  className="w-10 h-10 rounded-full bg-emerald-500/25 border border-emerald-400/40 flex items-center justify-center text-emerald-300 hover:bg-emerald-500/40 transition"
-                  title="Login / Register"
-                >
-                  <LogIn className="w-4 h-4" />
-                </button>
-              )}
-              {currentUser && (
-                <button
-                  onClick={handleLogout}
-                  className="w-9 h-9 rounded-full bg-rose-500/20 hover:bg-rose-500/40 border border-rose-400/30 flex items-center justify-center text-rose-300 transition"
-                  title="Logout"
-                >
-                  <LogOut className="w-4 h-4" />
-                </button>
-              )}
-
-              <button
-                onClick={() => setActiveModal("SETTINGS")}
-                className="w-10 h-10 rounded-full flex items-center justify-center text-white/65 hover:text-white hover:bg-white/10 transition"
-                title="Settings & Custom Background"
-              >
-                <Settings className="w-4 h-4" />
-              </button>
-            </div>
-          </aside>
-
-          {/* Dock 2: Collapsible Server Monogram Vertical Bar (Appears when arrow points down ▾) */}
-          <div
-            className={`spatial-glass-pill rounded-full flex flex-col items-center py-4 gap-3 overflow-y-auto spatial-panel-transition h-full ${
-              isServersExpanded
-                ? "w-14 opacity-100 translate-x-0 px-2"
-                : "w-0 opacity-0 -translate-x-4 px-0 pointer-events-none border-0"
-            }`}
-          >
-            <span className="text-[9px] font-bold uppercase tracking-widest text-white/40">
-              Srv
-            </span>
-            {displayedServers.map((srv) => {
-              const isSelected = activeServer?.id === srv.id;
-              return (
-                <button
-                  key={srv.id}
-                  onClick={() => handleSelectServer(srv)}
-                  className={`w-10 h-10 rounded-full font-bold text-xs flex items-center justify-center transition-all shrink-0 ${
-                    isSelected
-                      ? "bg-sky-500 text-white ring-2 ring-white/70 scale-105 shadow-lg shadow-sky-500/30"
-                      : "bg-white/10 text-white/75 hover:bg-white/20 hover:text-white"
-                  }`}
-                  title={srv.name}
-                >
-                  {srv.monogram}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Dock 3: Adjacent Collapsed Groups Monogram Bar!
-              (Appears automatically when Right Chat Panel comes to Center Stage!) */}
-          <div
-            className={`spatial-glass-pill rounded-full flex flex-col items-center py-4 gap-2.5 overflow-y-auto spatial-panel-transition h-full ${
-              focusedStage === "CHAT_IN_CENTER"
-                ? "w-14 opacity-100 translate-x-0 px-2"
-                : "w-0 opacity-0 -translate-x-4 px-0 pointer-events-none border-0"
-            }`}
-          >
-            <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-300/70">
-              Grp
-            </span>
-            {serverGroups.map((grp) => {
-              const isSelected = activeGroup?.id === grp.id;
-              const grpMonogram = grp.name
-                .split("-")
-                .map((w) => w[0])
-                .join("")
-                .toUpperCase()
-                .slice(0, 3);
-              return (
-                <button
-                  key={grp.id}
-                  onClick={() => handleSelectGroup(grp, true)}
-                  className={`w-10 h-10 rounded-2xl font-mono font-bold text-[11px] flex items-center justify-center transition-all shrink-0 ${
-                    isSelected
-                      ? "bg-emerald-500 text-white ring-2 ring-white/60 scale-105"
-                      : "bg-white/10 text-white/70 hover:bg-white/20"
-                  }`}
-                  title={`#${grp.name} (Click to switch group, double-click to expand groups to center)`}
-                  onDoubleClick={() => setFocusedStage("GROUPS_IN_CENTER")}
-                >
-                  #{grpMonogram}
-                </button>
-              );
-            })}
-            <button
-              onClick={() => setFocusedStage("GROUPS_IN_CENTER")}
-              className="mt-auto w-9 h-9 rounded-full bg-white/10 hover:bg-white/25 flex items-center justify-center text-white/70 text-xs"
-              title="Restore Groups Panel to Center Stage"
-            >
-              <Maximize2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-
-        {/* -------------------------------------------------------------------
-            B. CENTER STAGE PANEL
-            When focusedStage === 'GROUPS_IN_CENTER': Shows Server's Groups & Questions Feed
-            When focusedStage === 'CHAT_IN_CENTER': The Group's People Chat / Q&A Thread glides here!
-        -------------------------------------------------------------------- */}
-        {focusedStage === "GROUPS_IN_CENTER" ? (
-          /* === CENTER STATE 1: SERVER GROUPS & QUESTIONS FEED === */
-          <section className="spatial-glass spatial-panel-transition flex-1 max-w-3xl h-full rounded-[34px] flex flex-col overflow-hidden">
-            {/* Panel Header (Mirrors "Home | For you | Following" in VisionOS Reference) */}
-            <div className="px-6 pt-5 pb-3 border-b border-white/10 flex items-center justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="px-2.5 py-0.5 rounded-full bg-sky-500/25 border border-sky-400/30 text-sky-300 text-xs font-bold">
-                    {activeServer?.monogram || "SRV"}
-                  </span>
-                  <h1 className="text-lg font-bold tracking-tight">
-                    {activeServer?.name || "Select a Community"}
-                  </h1>
-                </div>
-                <p className="text-xs text-white/55 mt-0.5">
-                  {activeServer?.description}
-                </p>
-              </div>
-
-              {/* Feed Sorting Tabs (Newest vs Top - Required by PS 06) */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setFeedSort("newest")}
-                  className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${
-                    feedSort === "newest"
-                      ? "bg-sky-500 text-white shadow-md shadow-sky-500/30"
-                      : "bg-white/10 text-white/70 hover:bg-white/15"
-                  }`}
-                >
-                  Newest
-                </button>
-                <button
-                  onClick={() => setFeedSort("top")}
-                  className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${
-                    feedSort === "top"
-                      ? "bg-sky-500 text-white shadow-md shadow-sky-500/30"
-                      : "bg-white/10 text-white/70 hover:bg-white/15"
-                  }`}
-                >
-                  Top Voted
-                </button>
-              </div>
-            </div>
-
-            {/* Horizontal Discord-Style Groups Pill Bar inside the Server */}
-            <div className="px-6 py-3 bg-black/20 border-b border-white/10 flex items-center gap-2 overflow-x-auto">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-white/40 mr-1">
-                Groups:
-              </span>
-              {serverGroups.map((grp) => {
-                const isSelected = activeGroup?.id === grp.id;
-                return (
-                  <button
-                    key={grp.id}
-                    onClick={() => handleSelectGroup(grp, false)}
-                    className={`px-3.5 py-1.5 rounded-full text-xs font-medium flex items-center gap-1.5 transition shrink-0 ${
-                      isSelected
-                        ? "bg-white text-zinc-900 font-semibold shadow"
-                        : "bg-white/10 text-white/75 hover:bg-white/20"
-                    }`}
-                  >
-                    <Hash className="w-3.5 h-3.5 opacity-70" />
-                    <span>{grp.name}</span>
-                    <span className="text-[10px] opacity-60">
-                      ({grp.post_count || 0})
-                    </span>
-                  </button>
-                );
-              })}
-
-              <button
-                onClick={() =>
-                  setActiveModal(currentUser ? "CREATE_HUB" : "AUTH")
-                }
-                className="px-3 py-1.5 rounded-full bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/30 text-emerald-300 text-xs font-medium shrink-0 ml-auto"
-              >
-                + New Group / Post
-              </button>
-            </div>
-
-            {/* Active Tag Filter Banner */}
-            {selectedTag && (
-              <div className="px-6 py-1.5 bg-sky-500/20 flex items-center justify-between text-xs">
-                <span>
-                  Filtering by tag: <strong>#{selectedTag}</strong>
-                </span>
-                <button
-                  onClick={() => setSelectedTag("")}
-                  className="text-sky-300 hover:underline"
-                >
-                  Clear filter
-                </button>
-              </div>
-            )}
-
-            {/* Quick Composer Bar (Mirrors "What is Happening?" in VisionOS Reference) */}
-            <div className="px-6 py-3 border-b border-white/10 flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center font-bold text-xs shrink-0">
-                {currentUser
-                  ? currentUser.username.slice(0, 2).toUpperCase()
-                  : "?"}
-              </div>
-              <button
-                onClick={() =>
-                  setActiveModal(currentUser ? "CREATE_HUB" : "AUTH")
-                }
-                className="flex-1 text-left px-4 py-2 rounded-full bg-white/10 hover:bg-white/15 border border-white/15 text-xs text-white/60 transition"
-              >
-                Ask a technical question or share code in #
-                {activeGroup?.name || "group"}...
-              </button>
-            </div>
-
-            {/* Scrollable Posts & Questions Feed */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              {posts.length === 0 ? (
-                <div className="text-center py-12 text-white/50 text-sm">
-                  No questions posted in <strong>#{activeGroup?.name}</strong>{" "}
-                  yet. Click above to post the first one!
-                </div>
-              ) : (
-                posts.map((post) => (
-                  <article
-                    key={post.id}
-                    onClick={() => {
-                      handleSelectPost(post);
-                      setRightPanelTab("QA_THREAD");
-                    }}
-                    className={`p-4 rounded-2xl border transition cursor-pointer ${
-                      activePost?.id === post.id
-                        ? "bg-white/15 border-sky-400/50 shadow-lg"
-                        : "bg-black/25 border-white/10 hover:bg-white/10"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between text-xs text-white/60 mb-1.5">
-                      <div className="flex items-center gap-2">
-                        <span
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openUserProfile(post.author_username);
-                          }}
-                          className="font-semibold text-white hover:text-sky-300 cursor-pointer"
-                        >
-                          @{post.author_username}
-                        </span>
-                        <span className="text-amber-300/90 text-[11px]">
-                          ★ {post.author_reputation}
-                        </span>
-                        <span>•</span>
-                        <span>
-                          {new Date(post.created_at).toLocaleDateString()}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {post.accepted_comment_id && (
-                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[10px] flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3" /> Solved
-                          </span>
-                        )}
-                        {currentUser?.id === post.author_id && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeletePost(post.id);
-                            }}
-                            className="text-rose-400 hover:text-rose-300 p-1"
-                            title="Delete Own Post"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        {currentUser?.id === post.author_id && (
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setEditingPost(post);
-                                setActiveModal("EDIT_POST");
-                              }}
-                              className="text-sky-400 hover:text-sky-300 p-1"
-                              title="Edit Own Post"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeletePost(post.id);
-                              }}
-                              className="text-rose-400 hover:text-rose-300 p-1"
-                              title="Delete Own Post"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <h2 className="text-base font-semibold text-white mb-2">
-                      {post.title}
-                    </h2>
-
-                    {/* Render Markdown & Syntax Code Blocks */}
-                    <div className="line-clamp-4">
-                      {renderMarkdownElements(post.body_markdown)}
-                    </div>
-
-                    {/* Tags & Voting Footer */}
-                    <div className="mt-3 pt-2.5 border-t border-white/10 flex items-center justify-between">
-                      <div className="flex flex-wrap gap-1.5">
-                        {post.tags?.map((tag) => (
-                          <button
-                            key={tag}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedTag(tag);
-                            }}
-                            className="px-2.5 py-0.5 rounded-full bg-white/10 hover:bg-sky-500/30 text-[11px] text-sky-200 transition"
-                          >
-                            #{tag}
-                          </button>
-                        ))}
-                      </div>
-
-                      <div className="flex items-center gap-3 text-xs">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleVote("POST", post.id, 1);
-                          }}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-emerald-500/30 transition"
-                        >
-                          <ThumbsUp className="w-3.5 h-3.5 text-emerald-300" />
-                          <span>{post.score}</span>
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleVote("POST", post.id, -1);
-                          }}
-                          className="p-1 rounded-full bg-white/10 hover:bg-rose-500/30 transition"
-                        >
-                          <ThumbsDown className="w-3.5 h-3.5 text-rose-300" />
-                        </button>
-                        <span className="flex items-center gap-1 text-white/60">
-                          <MessageSquare className="w-3.5 h-3.5" />{" "}
-                          {post.comment_count || 0} answers
-                        </span>
-                      </div>
-                    </div>
-                  </article>
-                ))
-              )}
-            </div>
-          </section>
-        ) : (
-          /* === CENTER STATE 2: RIGHT GROUP CHAT & ANSWERS PANEL GLIDED TO CENTER STAGE! === */
-          <section className="spatial-glass spatial-panel-transition flex-1 max-w-4xl h-full rounded-[34px] flex flex-col overflow-hidden border-sky-400/30">
-            <div className="px-6 py-4 border-b border-white/15 flex items-center justify-between bg-black/20">
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setFocusedStage("GROUPS_IN_CENTER")}
-                  className="px-3 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs flex items-center gap-1.5 transition"
-                >
-                  ← Back to Groups
-                </button>
-                <div>
-                  <h2 className="text-base font-bold flex items-center gap-1.5">
-                    <Hash className="w-4 h-4 text-emerald-400" />
-                    {activeGroup?.name || "group-chat"}
-                    <span className="text-xs font-normal text-white/50 ml-1">
-                      ({activeServer?.name})
-                    </span>
-                  </h2>
-                </div>
-              </div>
-
-              {/* Mode Switcher: Live Group Chat vs Structured Q&A Answers */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setRightPanelTab("LIVE_CHAT")}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition ${
-                    rightPanelTab === "LIVE_CHAT"
-                      ? "bg-emerald-500 text-white"
-                      : "bg-white/10 text-white/70"
-                  }`}
-                >
-                  Live People Chat ({groupMessages.length})
-                </button>
-                <button
-                  onClick={() => setRightPanelTab("QA_THREAD")}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition ${
-                    rightPanelTab === "QA_THREAD"
-                      ? "bg-sky-500 text-white"
-                      : "bg-white/10 text-white/70"
-                  }`}
-                >
-                  Q&A Answers ({postComments.length})
-                </button>
-              </div>
-            </div>
-
-            {/* Body of Expanded Center Chat / Q&A */}
-            {rightPanelTab === "LIVE_CHAT" ? (
-              <div className="flex-1 flex flex-col overflow-hidden">
-                <div className="flex-1 overflow-y-auto p-6 space-y-3">
-                  {groupMessages.length === 0 ? (
-                    <div className="text-center py-12 text-white/40 text-xs">
-                      Start the live conversation in #{activeGroup?.name}!
-                      Messages sync in real time via Socket.io + MongoDB.
-                    </div>
-                  ) : (
-                    groupMessages.map((m, i) => (
-                      <div
-                        key={m._id || i}
-                        className="p-3.5 rounded-2xl bg-black/30 border border-white/10"
-                      >
-                        <div className="flex items-center justify-between text-xs mb-1">
-                          <span
-                            onClick={() => openUserProfile(m.senderUsername)}
-                            className="font-semibold text-emerald-300 hover:underline cursor-pointer"
-                          >
-                            @{m.senderUsername}
-                          </span>
-                          <span className="text-[10px] text-white/40">
-                            {new Date(
-                              m.createdAt || Date.now(),
-                            ).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                        </div>
-                        <p className="text-sm text-white/90">{m.content}</p>
-                        {m.codeSnippet && (
-                          <pre className="mt-2 p-2.5 rounded-xl bg-black/70 border border-white/10 text-xs font-mono text-sky-300 overflow-x-auto">
-                            <code>{m.codeSnippet}</code>
-                          </pre>
-                        )}
-                      </div>
-                    ))
-                  )}
-                  <div ref={chatEndRef} />
-                </div>
-
-                {/* Live Chat Input Bar */}
-                <form
-                  onSubmit={handleSendGroupChat}
-                  className="p-4 bg-black/30 border-t border-white/10 space-y-2"
-                >
-                  {showCodeBox && (
-                    <textarea
-                      rows={3}
-                      placeholder="Paste code snippet here..."
-                      value={codeInput}
-                      onChange={(e) => setCodeInput(e.target.value)}
-                      className="w-full p-2.5 rounded-xl bg-black/60 border border-white/15 text-xs font-mono text-emerald-300"
-                    />
-                  )}
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowCodeBox(!showCodeBox)}
-                      className="p-2.5 rounded-full bg-white/10 hover:bg-white/20 text-sky-300"
-                      title="Attach Code Snippet"
-                    >
-                      <Code2 className="w-4 h-4" />
-                    </button>
-                    <input
-                      type="text"
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      placeholder={`Message everyone in #${activeGroup?.name || "group"}...`}
-                      className="flex-1 px-4 py-2.5 rounded-full bg-black/40 border border-white/15 text-xs focus:outline-none focus:border-emerald-400"
-                    />
-                    <button
-                      type="submit"
-                      className="px-5 py-2.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-xs font-semibold flex items-center gap-1.5 transition"
-                    >
-                      <Send className="w-3.5 h-3.5" /> Send
-                    </button>
-                  </div>
-                </form>
-              </div>
-            ) : (
-              /* Structured Q&A Answers View with Upvote/Downvote & Accepted Answer */
-              <div className="flex-1 flex flex-col overflow-hidden">
-                <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                  {activePost ? (
-                    <>
-                      <div className="p-4 rounded-2xl bg-sky-500/10 border border-sky-400/30">
-                        <div className="text-xs text-sky-300 mb-1">
-                          Question by @{activePost.author_username} • Score:{" "}
-                          {activePost.score}
-                        </div>
-                        <h3 className="text-base font-bold mb-2">
-                          {activePost.title}
-                        </h3>
-                        {renderMarkdownElements(activePost.body_markdown)}
-                      </div>
-
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-white/50">
-                        {postComments.length} Community Answers
-                      </h4>
-
-                      {postComments.map((c) => {
-                        const isAccepted =
-                          activePost.accepted_comment_id === c.id;
-                        return (
-                          <div
-                            key={c.id}
-                            className={`p-4 rounded-2xl border ${
-                              isAccepted
-                                ? "bg-emerald-500/15 border-emerald-400/50"
-                                : "bg-black/30 border-white/10"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between text-xs mb-2">
-                              <div className="flex items-center gap-2">
-                                <span
-                                  onClick={() =>
-                                    openUserProfile(c.author_username)
-                                  }
-                                  className="font-semibold text-white hover:underline cursor-pointer"
-                                >
-                                  @{c.author_username}
-                                </span>
-                                {isAccepted && (
-                                  <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-white text-[10px] font-bold flex items-center gap-1">
-                                    <CheckCircle2 className="w-3 h-3" />{" "}
-                                    Accepted Answer
-                                  </span>
-                                )}
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                {currentUser?.id === activePost.author_id &&
-                                  !isAccepted && (
-                                    <button
-                                      onClick={() => handleAcceptAnswer(c.id)}
-                                      className="px-2.5 py-1 rounded-full bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-300 text-[11px]"
-                                    >
-                                      ✓ Mark Accepted
-                                    </button>
-                                  )}
-                                <button
-                                  onClick={() => handleVote("COMMENT", c.id, 1)}
-                                  className="px-2 py-0.5 rounded-full bg-white/10 hover:bg-emerald-500/30 text-xs flex items-center gap-1"
-                                >
-                                  ▲ {c.score}
-                                </button>
-                                <button
-                                  onClick={() =>
-                                    handleVote("COMMENT", c.id, -1)
-                                  }
-                                  className="px-2 py-0.5 rounded-full bg-white/10 hover:bg-rose-500/30 text-xs"
-                                >
-                                  ▼
-                                </button>
-                              </div>
-                            </div>
-
-                            {renderMarkdownElements(c.body_markdown)}
-                          </div>
-                        );
-                      })}
-                    </>
-                  ) : (
-                    <div className="text-center py-12 text-white/40 text-xs">
-                      Select a question from the group feed to view or post
-                      answers.
-                    </div>
-                  )}
-                </div>
-
-                {activePost && (
-                  <form
-                    onSubmit={handleAddAnswer}
-                    className="p-4 bg-black/30 border-t border-white/10 flex gap-2"
-                  >
-                    <textarea
-                      rows={2}
-                      value={answerInput}
-                      onChange={(e) => setAnswerInput(e.target.value)}
-                      placeholder="Write a helpful Markdown answer (use ``` for code blocks)..."
-                      className="flex-1 px-3.5 py-2 rounded-2xl bg-black/40 border border-white/15 text-xs font-mono"
-                    />
-                    <button
-                      type="submit"
-                      className="px-4 py-2 rounded-2xl bg-sky-500 hover:bg-sky-400 text-xs font-semibold shrink-0"
-                    >
-                      Post Answer
-                    </button>
-                  </form>
-                )}
-              </div>
-            )}
-          </section>
-        )}
-
-        {/* -------------------------------------------------------------------
-            C. RIGHT 3D-TILTED SPATIAL WING PANEL (Mirrors "Messages" Panel in Reference Image)
-            Clicking anywhere on this panel smoothly glides it to Center Stage!
-        -------------------------------------------------------------------- */}
-        {focusedStage === "GROUPS_IN_CENTER" && (
-          <aside
-            onClick={() => setFocusedStage("CHAT_IN_CENTER")}
-            className="spatial-glass spatial-right-wing w-80 lg:w-96 h-full max-h-[560px] rounded-[32px] flex flex-col overflow-hidden cursor-pointer shrink-0"
-            title="Click to bring Group Chat & Thread to Center Stage!"
-          >
-            {/* Right Wing Header (Mirrors "Messages" + Expand Icon in Reference Image) */}
-            <div className="px-5 pt-5 pb-3 border-b border-white/10 flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-bold tracking-tight flex items-center gap-1.5">
-                  <span>#{activeGroup?.name || "Select Group"}</span>
-                </h2>
-                <p className="text-[11px] text-sky-300">
-                  Click panel to bring to Center Stage ⤢
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setRightPanelTab(
-                      rightPanelTab === "LIVE_CHAT" ? "QA_THREAD" : "LIVE_CHAT",
-                    );
-                  }}
-                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center"
-                  title="Toggle Chat vs Q&A Answers"
-                >
-                  <MessageSquare className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setFocusedStage("CHAT_IN_CENTER");
-                  }}
-                  className="w-8 h-8 rounded-full bg-white/15 hover:bg-sky-500 flex items-center justify-center transition"
-                  title="Bring to Center Stage"
-                >
-                  <Maximize2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Right Wing Content Preview (People Chatting in Selected Group) */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              {rightPanelTab === "LIVE_CHAT"
-                ? groupMessages.length > 0
-                  ? groupMessages.map((msg, idx) => (
-                      <div
-                        key={msg._id || idx}
-                        className="flex items-start gap-3 p-2.5 rounded-2xl hover:bg-white/10 transition border-b border-white/5"
-                      >
-                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 text-zinc-950 font-bold text-xs flex items-center justify-center shrink-0">
-                          {msg.senderUsername?.slice(0, 2).toUpperCase()}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-semibold text-white truncate">
-                              {msg.senderUsername}
-                            </span>
-                            <span className="text-[10px] text-white/45">
-                              {new Date(
-                                msg.createdAt || Date.now(),
-                              ).toLocaleTimeString([], {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })}
-                            </span>
-                          </div>
-                          <p className="text-xs text-white/70 truncate mt-0.5">
-                            {msg.content}
-                          </p>
-                        </div>
-                      </div>
-                    ))
-                  : /* If no live chat messages yet, show active Post Answers in the Group */
-                    postComments.map((c) => (
-                      <div
-                        key={c.id}
-                        className="flex items-start gap-3 p-2.5 rounded-2xl hover:bg-white/10 transition border-b border-white/5"
-                      >
-                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-sky-400 to-indigo-500 text-white font-bold text-xs flex items-center justify-center shrink-0">
-                          {c.author_username?.slice(0, 2).toUpperCase()}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-semibold text-white">
-                              @{c.author_username}
-                            </span>
-                            <span className="text-[10px] text-emerald-300">
-                              +{c.score}
-                            </span>
-                          </div>
-                          <p className="text-xs text-white/70 line-clamp-2 mt-0.5">
-                            {c.body_markdown}
-                          </p>
-                        </div>
-                      </div>
-                    ))
-                : postComments.map((c) => (
-                    <div
-                      key={c.id}
-                      className="p-3 rounded-2xl bg-black/25 border border-white/10 text-xs"
-                    >
-                      <div className="font-semibold text-sky-300 mb-1">
-                        @{c.author_username}
-                      </div>
-                      <div className="line-clamp-3 text-white/80">
-                        {c.body_markdown}
-                      </div>
-                    </div>
-                  ))}
-
-              {groupMessages.length === 0 && postComments.length === 0 && (
-                <div className="text-center py-12 px-4 text-xs text-white/50">
-                  Click this 3D panel to bring{" "}
-                  <strong>#{activeGroup?.name}</strong> to Center Stage and
-                  start chatting or answering!
-                </div>
-              )}
-            </div>
-          </aside>
-        )}
-      </main>
-
-      {/* =====================================================================
-          3. BOTTOM FLOATING DOCK (Mirrors Bottom Warm Glass Pill in Reference Image)
-      ====================================================================== */}
-      <footer className="fixed bottom-4 left-1/2 -translate-x-1/2 z-30">
-        <div className="spatial-Bottom-Dock px-7 py-2.5 rounded-full flex items-center gap-7">
-          <button
-            onClick={() => setFocusedStage("GROUPS_IN_CENTER")}
-            className="text-white/80 hover:text-white transition"
-            title="Home Stage"
-          >
-            <Home className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() =>
-              document.querySelector('input[placeholder*="Search"]')?.focus()
-            }
-            className="text-white/80 hover:text-white transition"
-            title="Omni-Search"
-          >
-            <Search className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setShowNotifications(!showNotifications)}
-            className="text-white/80 hover:text-white transition"
-            title="Notifications"
-          >
-            <Bell className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setFocusedStage("CHAT_IN_CENTER")}
-            className="text-white/80 hover:text-white transition"
-            title="Focus Group Chat"
-          >
-            <MessageSquare className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setActiveModal(currentUser ? "CREATE_HUB" : "AUTH")}
-            className="text-white/80 hover:text-white transition"
-            title="Create Post / Group / Server"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setActiveModal("SETTINGS")}
-            className="text-white/80 hover:text-white transition"
-            title="Environment & Profile Settings"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
-        </div>
-      </footer>
-
-      {/* Modals for Auth, Create Server/Group/Post, Settings & User Profiles */}
-      <SpatialModals
-        activeGroup={activeGroup}
-        activeModal={activeModal}
-        activeServer={activeServer}
-        bgImage={bgImage}
-        currentUser={currentUser}
-        onRefreshData={fetchInitialWorkspace}
-        setActiveModal={setActiveModal}
-        setBgImage={setBgImage}
-        setCurrentUser={setCurrentUser}
-        viewedProfile={viewedProfile}
+      <BottomDock
+        view={view}
+        stage={stage}
+        isServersOpen={isServersOpen}
+        hasUnread={hasUnread}
+        notificationsOpen={notificationsOpen}
+        onHome={openHome}
+        onSearch={focusSearch}
+        onToggleServers={() => setIsServersOpen((v) => !v)}
+        onBell={toggleNotifications}
+        onChat={() => setStage((s) => (s === "chat" ? "groups" : "chat"))}
+        onCreate={openCreate}
+        onSettings={() => setActiveModal("SETTINGS")}
       />
+
+      <NotificationsPopover open={notificationsOpen} notifications={notifications} onClose={closeNotifications} />
+
+      <SpatialModals
+        activeModal={activeModal}
+        onClose={closeModal}
+        currentUser={currentUser}
+        activeServer={activeServer}
+        activeGroup={activeGroup}
+        editingPost={editingPost}
+        bgImage={bgImage}
+        setBgImage={setBgImage}
+        viewedProfile={viewedProfile}
+        allServers={allServers}
+        joinedIds={joinedIds}
+        confirmAction={confirmAction}
+        onAuthSuccess={handleAuthSuccess}
+        onLogout={handleLogout}
+        onPostSaved={async () => {
+          const editedId = editingPost?.id;
+          setEditingPost(null);
+          closeModal();
+          refreshPosts();
+          reloadGroups().catch(() => {});
+          if (editedId && editedId === activePost?.id) reloadActivePost(editedId);
+        }}
+        onGroupCreated={async () => {
+          closeModal();
+          await reloadGroups();
+          showToast("Group created.");
+        }}
+        onServerCreated={async (server) => {
+          closeModal();
+          await loadServers();
+          setIsServersOpen(true);
+          if (server) openServer(server);
+          showToast("Server created.");
+        }}
+        onProfileSaved={(user) => {
+          setCurrentUser(user);
+          closeModal();
+          showToast("Profile saved.");
+        }}
+        onJoinServer={joinServer}
+        onOpenServer={(s) => {
+          closeModal();
+          openServer(s);
+        }}
+        onRequireSignIn={requireSignIn}
+      />
+
+      <div
+        role="status"
+        aria-live="polite"
+        className={`glass pointer-events-none fixed left-1/2 top-[5.5rem] z-[70] max-w-[calc(100vw-1.5rem)] -translate-x-1/2 rounded-full px-5 py-2.5 text-sm transition duration-300 ease-spatial ${
+          toast ? "translate-y-0 opacity-100" : "-translate-y-2 opacity-0"
+        }`}
+      >
+        {toast}
+      </div>
     </div>
   );
 }

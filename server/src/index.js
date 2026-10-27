@@ -4,7 +4,9 @@ import { Server as SocketServer } from 'socket.io';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
+import jwt from 'jsonwebtoken';
 import { connectPostgres, query } from './config/postgres.js';
+import { setIO, userRoom } from './config/socket.js';
 import { connectMongo } from './config/mongo.js';
 import authRoutes from './routes/authRoutes.js';
 import serverRoutes from './routes/serverRoutes.js';
@@ -43,37 +45,74 @@ app.use('/api/auth', authRoutes);
 app.use('/api/servers', serverRoutes);
 app.use('/api/posts', postRoutes);
 
-// WebSocket Real-Time Event Handling (Right Spatial Panel Group Chat)
-io.on('connection', (socket) => {
-  console.log(`⚡ Socket connected: ${socket.id}`);
+setIO(io);
 
-  // When a user clicks a Group, their browser joins that Group's real-time room
+// Identify the socket once, at connection time, from the same JWT the REST API uses.
+// Anonymous visitors may still connect and read a group's chat, but cannot send.
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token;
+  socket.user = null;
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      socket.user = { id: decoded.userId, username: decoded.username };
+    } catch {
+      // Expired or forged token: treat as anonymous instead of rejecting the connection.
+    }
+  }
+  next();
+});
+
+io.on('connection', (socket) => {
+  // Every logged-in user gets a private room so notifications can be pushed live.
+  if (socket.user) socket.join(userRoom(socket.user.id));
+
+  // A socket sits in at most one group room at a time, so chat can never leak
+  // from a group the user has already left.
   socket.on('join_group', (groupId) => {
-    const roomName = `group_${groupId}`;
-    socket.join(roomName);
+    for (const room of socket.rooms) {
+      if (room.startsWith('group_')) socket.leave(room);
+    }
+    socket.join(`group_${Number(groupId)}`);
   });
 
-  // When a user sends a chat message inside a Group's Right Spatial Panel
-  socket.on('send_group_message', async (payload) => {
+  socket.on('leave_group', (groupId) => {
+    socket.leave(`group_${Number(groupId)}`);
+  });
+
+  socket.on('send_group_message', async (payload, ack) => {
     try {
-      const { groupId, senderId, senderUsername, content, codeSnippet = '' } = payload;
+      if (!socket.user) {
+        return ack?.({ ok: false, message: 'Log in to chat.' });
+      }
+
+      const groupId = Number(payload?.groupId);
+      const content = String(payload?.content ?? '').trim().slice(0, 2000);
+      const codeSnippet = String(payload?.codeSnippet ?? '').slice(0, 5000);
+      if (!Number.isInteger(groupId) || !content) {
+        return ack?.({ ok: false, message: 'Message cannot be empty.' });
+      }
+
+      const group = await query('SELECT 1 FROM groups WHERE id = $1', [groupId]);
+      if (group.rows.length === 0) {
+        return ack?.({ ok: false, message: 'That group no longer exists.' });
+      }
+
+      // Sender identity comes from the verified token, never from the client payload.
       const savedMsg = await GroupMessage.create({
-        groupId: Number(groupId),
-        senderId: Number(senderId),
-        senderUsername,
+        groupId,
+        senderId: socket.user.id,
+        senderUsername: socket.user.username,
         content,
         codeSnippet,
       });
 
-      // Broadcast message immediately to everyone viewing that Group
       io.to(`group_${groupId}`).emit('new_group_message', savedMsg);
+      ack?.({ ok: true });
     } catch (err) {
       console.error('Socket Message Error:', err.message);
+      ack?.({ ok: false, message: 'Could not send message.' });
     }
-  });
-
-  socket.on('disconnect', () => {
-    console.log(`🔌 Socket disconnected: ${socket.id}`);
   });
 });
 
