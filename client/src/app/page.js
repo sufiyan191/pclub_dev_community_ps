@@ -42,6 +42,15 @@ import SpatialModals from "../components/SpatialModals";
 const DEFAULT_BG =
   "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2000&q=85";
 
+// Safe time formatter: never calls Date.now(), so it is OK during prerender.
+function formatTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+// NOTE: fixed ISO timestamps (no Date.now()) so the build/prerender is deterministic.
 const FALLBACK_POSTS = [
   {
     id: "demo-1",
@@ -50,7 +59,7 @@ const FALLBACK_POSTS = [
       "Vision Pro features an ultra-high-resolution display system across two displays. For web spatial UIs, combining `perspective(1350px) rotateY(-15deg)` with `backdrop-filter: blur(44px)` gives authentic depth without WebGL overhead.\n```js\nconst transform = 'perspective(1350px) rotateY(-15deg)';\n```",
     author_name: "Sufiyan Ahmad",
     author_username: "sufiyan",
-    created_at: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+    created_at: "2026-01-20T10:00:00.000Z",
     tags: ["visionos", "nextjs", "webgl"],
     upvotes: 42,
     comment_count: 2,
@@ -65,7 +74,7 @@ const FALLBACK_POSTS = [
         author_username: "aarav_dev",
         content: "Using persistent flex containers with cubic-bezier(0.22, 1, 0.36, 1) completely fixes the layout jump on state change!",
         is_accepted: true,
-        created_at: new Date(Date.now() - 3600 * 1000).toISOString(),
+        created_at: "2026-01-20T11:00:00.000Z",
       },
     ],
   },
@@ -76,7 +85,7 @@ const FALLBACK_POSTS = [
       "Using PostgreSQL for ACID-compliant user reputation, posts, and atomic vote transactions while offloading high-throughput room chat streams to MongoDB keeps latency under 12ms.",
     author_name: "PClub Software Div",
     author_username: "pclub_iiti",
-    created_at: new Date(Date.now() - 6 * 3600 * 1000).toISOString(),
+    created_at: "2026-01-20T06:00:00.000Z",
     tags: ["postgres", "mongodb", "system-design"],
     upvotes: 89,
     comment_count: 1,
@@ -155,19 +164,19 @@ export default function SpatialCommunityApp() {
   const [expandedPostId, setExpandedPostId] = useState(null);
   const [commentDraft, setCommentDraft] = useState("");
 
-  // Live Chat & Socket State
+  // Live Chat & Socket State (fixed timestamps: no Date.now() during render)
   const [messages, setMessages] = useState([
     {
       _id: "m-1",
       sender_name: "Aarav Sharma",
       content: "Welcome to the spatial developer channel! Click any group on the right wing to bring it center stage.",
-      createdAt: new Date(Date.now() - 1800 * 1000).toISOString(),
+      createdAt: "2026-01-20T10:00:00.000Z",
     },
     {
       _id: "m-2",
       sender_name: "Riya Verma",
       content: "Notice how the servers and channels smoothly morph into the left monogram bar when chatting.",
-      createdAt: new Date(Date.now() - 600 * 1000).toISOString(),
+      createdAt: "2026-01-20T10:20:00.000Z",
     },
   ]);
   const [chatInput, setChatInput] = useState("");
@@ -887,12 +896,9 @@ export default function SpatialCommunityApp() {
                             <CheckCircle2 className="w-4 h-4 text-[#1d9bf0] fill-[#1d9bf0]/20" />
                             <span className="text-xs text-white/50">
                               @{post.author_username || "dev"} ·{" "}
-                              {new Date(
-                                post.created_at || Date.now()
-                              ).toLocaleTimeString([], {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })}
+                              <time suppressHydrationWarning>
+                                {formatTime(post.created_at)}
+                              </time>
                             </span>
                           </div>
                         </div>
@@ -1184,12 +1190,9 @@ export default function SpatialCommunityApp() {
                             {msg.sender_name || "Developer"}
                           </span>
                           <span className="text-[10px] opacity-60">
-                            {new Date(
-                              msg.createdAt || Date.now()
-                            ).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
+                            <time suppressHydrationWarning>
+                              {formatTime(msg.createdAt)}
+                            </time>
                           </span>
                         </div>
                         <p className="leading-relaxed break-words">
