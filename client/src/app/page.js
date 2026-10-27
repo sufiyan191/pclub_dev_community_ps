@@ -1,1402 +1,1478 @@
 "use client";
-import React, { useState, useEffect, useRef } from "react";
+
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { io } from "socket.io-client";
 import {
   Home,
   Search,
   Bell,
-  Plus,
+  Mail,
+  Bookmark,
   Settings,
-  ChevronRight,
   Maximize2,
   Minimize2,
-  Send,
-  ThumbsUp,
-  ThumbsDown,
-  CheckCircle2,
-  Hash,
-  MessageSquare,
+  Image as ImageIcon,
   Code2,
+  ListFilter,
+  Smile,
+  Calendar,
+  MessageCircle,
+  Repeat2,
+  Heart,
+  BarChart2,
+  Share,
+  CheckCircle2,
+  Plus,
+  Send,
+  Hash,
+  Users,
+  ArrowLeft,
   Sparkles,
-  LogIn,
-  LogOut,
   Trash2,
   Edit3,
-  Users,
-  Bookmark,
-  Layers,
+  LogOut,
+  User as UserIcon,
+  ChevronUp,
+  ChevronDown,
+  Check,
 } from "lucide-react";
-import { io } from "socket.io-client";
 import { apiRequest, renderMarkdownElements } from "../lib/api";
 import SpatialModals from "../components/SpatialModals";
 
-const SOCKET_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+const DEFAULT_BG =
+  "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2000&q=85";
 
-export default function SpatialWorkspacePage() {
-  // 1. User & Environment State
+const FALLBACK_POSTS = [
+  {
+    id: "demo-1",
+    title: "VisionOS Spatial Rendering in Next.js App Router",
+    content:
+      "Vision Pro features an ultra-high-resolution display system across two displays. For web spatial UIs, combining `perspective(1350px) rotateY(-15deg)` with `backdrop-filter: blur(44px)` gives authentic depth without WebGL overhead.\n```js\nconst transform = 'perspective(1350px) rotateY(-15deg)';\n```",
+    author_name: "Sufiyan Ahmad",
+    author_username: "sufiyan",
+    created_at: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+    tags: ["visionos", "nextjs", "webgl"],
+    upvotes: 42,
+    comment_count: 2,
+    media_urls: [
+      "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=800&q=80",
+      "https://images.unsplash.com/photo-1550745165-9bc0b252726f?auto=format&fit=crop&w=800&q=80",
+    ],
+    comments: [
+      {
+        id: "c-101",
+        author_name: "Aarav Mehta",
+        author_username: "aarav_dev",
+        content: "Using persistent flex containers with cubic-bezier(0.22, 1, 0.36, 1) completely fixes the layout jump on state change!",
+        is_accepted: true,
+        created_at: new Date(Date.now() - 3600 * 1000).toISOString(),
+      },
+    ],
+  },
+  {
+    id: "demo-2",
+    title: "PostgreSQL + MongoDB Polyglot Persistence for PClub Community",
+    content:
+      "Using PostgreSQL for ACID-compliant user reputation, posts, and atomic vote transactions while offloading high-throughput room chat streams to MongoDB keeps latency under 12ms.",
+    author_name: "PClub Software Div",
+    author_username: "pclub_iiti",
+    created_at: new Date(Date.now() - 6 * 3600 * 1000).toISOString(),
+    tags: ["postgres", "mongodb", "system-design"],
+    upvotes: 89,
+    comment_count: 1,
+    media_urls: [],
+    comments: [],
+  },
+];
+
+const FALLBACK_SERVERS = [
+  {
+    id: "srv-1",
+    name: "PClub IIT Indore",
+    description: "Official Software Division Community",
+    groups: [
+      { id: "grp-1", name: "general-dev", lastMsg: "Deployed the polyglot backend API 🚀", time: "11m", verified: true },
+      { id: "grp-2", name: "cp-algorithms", lastMsg: "Anyone upsolving Div. 2 D with segment trees?", time: "1h", verified: true },
+      { id: "grp-3", name: "fullstack-nextjs", lastMsg: "Check the new spatial glass transitions", time: "3h", verified: true },
+      { id: "grp-4", name: "dbms-internals", lastMsg: "Indexed CTE queries are running 4x faster", time: "1d", verified: false },
+    ],
+  },
+  {
+    id: "srv-2",
+    name: "Open Source Guild",
+    description: "GSOC & Linux Kernel Contributors",
+    groups: [
+      { id: "grp-5", name: "pr-reviews", lastMsg: "Merged PR #42 into main branch", time: "2h", verified: true },
+      { id: "grp-6", name: "rust-systems", lastMsg: "Zero-copy deserialization benchmarks", time: "5h", verified: false },
+    ],
+  },
+];
+
+const DIRECT_PEOPLE = [
+  { id: "dm-1", name: "Aarav Sharma", handle: "@aarav_s", time: "11 Jan", preview: "Reviewed your PostgreSQL schema migration...", avatar: "https://i.pravatar.cc/150?img=11" },
+  { id: "dm-2", name: "Riya Verma", handle: "@riyaverma", time: "15 Jan", preview: "The VisionOS blur tokens look super clean now!", avatar: "https://i.pravatar.cc/150?img=32" },
+  { id: "dm-3", name: "Kabir Nair", handle: "@kabir_cp", time: "17 Jan", preview: "Let's test WebSocket room broadcasting.", avatar: "https://i.pravatar.cc/150?img=15" },
+  { id: "dm-4", name: "Ananya Gupta", handle: "@ananya_ml", time: "21 Jan", preview: "Pushed the Docker Compose config for local dev.", avatar: "https://i.pravatar.cc/150?img=47" },
+  { id: "dm-5", name: "Devansh Joshi", handle: "@devansh_j", time: "25 Jan", preview: "Can we mark accepted answers on Q&A threads?", avatar: "https://i.pravatar.cc/150?img=53" },
+];
+
+export default function SpatialCommunityApp() {
+  // Core Auth & Environment State
   const [currentUser, setCurrentUser] = useState(null);
-  const [bgImage, setBgImage] = useState(
-    "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=2000&q=80",
-  );
+  const [bgImage, setBgImage] = useState(DEFAULT_BG);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // 2. Spatial Navigation Choreography State (Your Exact Discord + VisionOS Spec)
-  const [isServersExpanded, setIsServersExpanded] = useState(true); // Controls ▸ vs ▾ arrow & Server Monogram Bar
-  const [focusedStage, setFocusedStage] = useState("GROUPS_IN_CENTER"); // 'GROUPS_IN_CENTER' | 'CHAT_IN_CENTER'
-  const [rightPanelTab, setRightPanelTab] = useState("LIVE_CHAT"); // 'LIVE_CHAT' | 'QA_THREAD'
+  // Navigation & Spatial Mode
+  // navTab: 'home' | 'search' | 'notifications' | 'messages' | 'bookmarks'
+  const [navTab, setNavTab] = useState("home");
+  // centerMode: 'feed' | 'chat' (when a group/DM is brought to center stage)
+  const [centerMode, setCenterMode] = useState("feed");
+  // feedFilter: 'foryou' | 'following'
+  const [feedFilter, setFeedFilter] = useState("foryou");
+  // rightPanelTab: 'groups' | 'people'
+  const [rightPanelTab, setRightPanelTab] = useState("groups");
+  // Mobile drawer state for right panel
+  const [mobileWingOpen, setMobileWingOpen] = useState(false);
 
-  // 3. Data State (Servers, Groups, Posts, Comments, Live Chat, Notifications)
-  const [allServers, setAllServers] = useState([]);
-  const [joinedServers, setJoinedServers] = useState([]);
-  const [activeServer, setActiveServer] = useState(null);
-  const [serverGroups, setServerGroups] = useState([]);
-  const [activeGroup, setActiveGroup] = useState(null);
-
-  // Posts & Feed Filtering (PS 06 Core Requirements)
-  const [posts, setPosts] = useState([]);
-  const [feedSort, setFeedSort] = useState("newest"); // 'newest' | 'top'
-  const [selectedTag, setSelectedTag] = useState("");
-  const [activePost, setActivePost] = useState(null);
-  const [postComments, setPostComments] = useState([]);
-  const [editingPost, setEditingPost] = useState(null);
-
-  // Live Group Chat (MongoDB + Socket.io)
-  const [groupMessages, setGroupMessages] = useState([]);
-  const [chatInput, setChatInput] = useState("");
-  const [codeInput, setCodeInput] = useState("");
-  const [showCodeBox, setShowCodeBox] = useState(false);
-  const [answerInput, setAnswerInput] = useState("");
-
-  // Omni-Search & Notifications
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState(null);
+  // Community Data State
+  const [posts, setPosts] = useState(FALLBACK_POSTS);
+  const [servers, setServers] = useState(FALLBACK_SERVERS);
+  const [activeServer, setActiveServer] = useState(FALLBACK_SERVERS[0]);
+  const [activeGroup, setActiveGroup] = useState(FALLBACK_SERVERS[0].groups[0]);
   const [notifications, setNotifications] = useState([]);
-  const [showNotifications, setShowNotifications] = useState(false);
+  const [bookmarkedIds, setBookmarkedIds] = useState([]);
+  const [selectedTag, setSelectedTag] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
-  // Modals & Profile Viewer
-  const [activeModal, setActiveModal] = useState(null);
-  const [viewedProfile, setViewedProfile] = useState(null);
+  // Inline Post Composer State
+  const [quickText, setQuickText] = useState("");
+  const [quickTags, setQuickTags] = useState("");
+  const [quickCodeMode, setQuickCodeMode] = useState(false);
+  const [quickImageUrl, setQuickImageUrl] = useState("");
+  const [showImageInput, setShowImageInput] = useState(false);
 
+  // Post Comments / Accepted Answer Drawer
+  const [expandedPostId, setExpandedPostId] = useState(null);
+  const [commentDraft, setCommentDraft] = useState("");
+
+  // Live Chat & Socket State
+  const [messages, setMessages] = useState([
+    {
+      _id: "m-1",
+      sender_name: "Aarav Sharma",
+      content: "Welcome to the spatial developer channel! Click any group on the right wing to bring it center stage.",
+      createdAt: new Date(Date.now() - 1800 * 1000).toISOString(),
+    },
+    {
+      _id: "m-2",
+      sender_name: "Riya Verma",
+      content: "Notice how the servers and channels smoothly morph into the left monogram bar when chatting.",
+      createdAt: new Date(Date.now() - 600 * 1000).toISOString(),
+    },
+  ]);
+  const [chatInput, setChatInput] = useState("");
   const socketRef = useRef(null);
   const chatEndRef = useRef(null);
 
-  // Initial Boot: Load Saved Wallpaper, Current User, and Servers
+  // Modals State
+  const [activeModal, setActiveModal] = useState(null);
+  const [editingPost, setEditingPost] = useState(null);
+  const [viewedProfile, setViewedProfile] = useState(null);
+
+  // Load saved preferences & initial backend data
   useEffect(() => {
     const savedBg = localStorage.getItem("spatial_bg");
     if (savedBg) setBgImage(savedBg);
-
-    fetchInitialWorkspace();
-
-    // Connect Socket.io
-    socketRef.current = io(SOCKET_URL, { withCredentials: true });
-    socketRef.current.on("new_group_message", (msg) => {
-      setGroupMessages((prev) => [...prev, msg]);
-    });
-
-    return () => {
-      socketRef.current?.disconnect();
-    };
+    const savedBookmarks = localStorage.getItem("spatial_bookmarks");
+    if (savedBookmarks) {
+      try {
+        setBookmarkedIds(JSON.parse(savedBookmarks));
+      } catch {}
+    }
+    fetchInitialData();
   }, []);
 
-  const fetchInitialWorkspace = async () => {
-    try {
-      // Check if logged in
-      const token = localStorage.getItem("spatial_token");
-      if (token) {
-        try {
-          const meRes = await apiRequest("/api/auth/me");
-          setCurrentUser(meRes.user);
-          const notifRes = await apiRequest("/api/servers/notifications");
-          setNotifications(notifRes.notifications || []);
-        } catch {
-          localStorage.removeItem("spatial_token");
-        }
-      }
-
-      const srvRes = await apiRequest("/api/servers");
-      setAllServers(srvRes.allServers || []);
-      setJoinedServers(
-        srvRes.joinedServers?.length
-          ? srvRes.joinedServers
-          : srvRes.allServers || [],
-      );
-
-      if (srvRes.allServers?.length > 0 && !activeServer) {
-        handleSelectServer(srvRes.allServers[0]);
-      }
-    } catch (err) {
-      console.error("Workspace Init Error:", err.message);
-    }
-  };
-
-  // When a Server is clicked in the Left Monogram Bar -> Load its Groups in Center
-  const handleSelectServer = async (server) => {
-    setActiveServer(server);
-    setFocusedStage("GROUPS_IN_CENTER"); // Bring Groups list to Center Stage
-    try {
-      const grpRes = await apiRequest(`/api/servers/${server.id}/groups`);
-      const groups = grpRes.groups || [];
-      setServerGroups(groups);
-      if (groups.length > 0) {
-        handleSelectGroup(groups[0], false);
-      } else {
-        setActiveGroup(null);
-        setPosts([]);
-      }
-    } catch (err) {
-      console.error("Error loading groups:", err.message);
-    }
-  };
-
-  // When a Group is clicked -> Load its Posts & open its People Chat on the Right Spatial Wing!
-  const handleSelectGroup = async (group, bringChatToCenter = false) => {
-    setActiveGroup(group);
-    if (bringChatToCenter) {
-      setFocusedStage("CHAT_IN_CENTER");
-    }
-
-    // Join WebSocket room for this Group
-    socketRef.current?.emit("join_group", group.id);
-
-    try {
-      const [postsRes, chatRes] = await Promise.all([
-        apiRequest(
-          `/api/posts?groupId=${group.id}&sort=${feedSort}${selectedTag ? `&tag=${selectedTag}` : ""}`,
-        ),
-        apiRequest(`/api/servers/groups/${group.id}/chat`),
-      ]);
-
-      const fetchedPosts = postsRes.posts || [];
-      setPosts(fetchedPosts);
-      setGroupMessages(chatRes.messages || []);
-
-      if (fetchedPosts.length > 0) {
-        handleSelectPost(fetchedPosts[0]);
-      } else {
-        setActivePost(null);
-        setPostComments([]);
-      }
-    } catch (err) {
-      console.error("Error selecting group:", err.message);
-    }
-  };
-
-  // Reload posts when sort ('newest' vs 'top') or tag filter changes
+  // Connect Socket.io
   useEffect(() => {
-    if (!activeGroup) return;
-    apiRequest(
-      `/api/posts?groupId=${activeGroup.id}&sort=${feedSort}${selectedTag ? `&tag=${selectedTag}` : ""}`,
-    )
-      .then((res) => setPosts(res.posts || []))
-      .catch(() => {});
-  }, [feedSort, selectedTag]);
+    const backendUrl =
+      process.env.NEXT_PUBLIC_API_URL?.replace("/api", "") || "http://localhost:5000";
+    const socket = io(backendUrl, {
+      transports: ["websocket", "polling"],
+      reconnectionAttempts: 3,
+    });
+    socketRef.current = socket;
 
-  // Load a specific Post's Answers/Comments for the Q&A Thread tab
-  const handleSelectPost = async (post) => {
-    try {
-      const res = await apiRequest(`/api/posts/${post.id}`);
-      setActivePost(res.post);
-      setPostComments(res.comments || []);
-    } catch (err) {
-      console.error("Error loading post details:", err.message);
-    }
-  };
-
-  // Global Omni-Search Handler (Top Floating Bar)
-  useEffect(() => {
-    const timer = setTimeout(async () => {
-      if (!searchQuery.trim()) {
-        setSearchResults(null);
-        return;
-      }
-      try {
-        const res = await apiRequest(
-          `/api/servers/search?q=${encodeURIComponent(searchQuery)}`,
-        );
-        setSearchResults(res);
-      } catch (err) {
-        console.error(err);
-      }
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
-  // Send Live Chat Message in Right Spatial Panel (Socket.io + MongoDB)
-  const handleSendGroupChat = (e) => {
-    e.preventDefault();
-    if (!chatInput.trim()) return;
-    if (!currentUser) return setActiveModal("AUTH");
-
-    socketRef.current?.emit("send_group_message", {
-      groupId: activeGroup.id,
-      senderId: currentUser.id,
-      senderUsername: currentUser.username,
-      content: chatInput,
-      codeSnippet: codeInput,
+    socket.on("new_group_message", (msg) => {
+      setMessages((prev) => {
+        if (prev.some((m) => m._id === msg._id)) return prev;
+        return [...prev, msg];
+      });
     });
 
-    setChatInput("");
-    setCodeInput("");
-    setShowCodeBox(false);
-    setTimeout(
-      () => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }),
-      100,
-    );
-  };
+    return () => socket.disconnect();
+  }, []);
 
-  // Submit Structured Markdown Answer on a Post (PostgreSQL)
-  const handleAddAnswer = async (e) => {
+  // Auto-scroll chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, centerMode]);
+
+  async function fetchInitialData() {
+    try {
+      const token = localStorage.getItem("token");
+      if (token) {
+        const me = await apiRequest("/auth/me").catch(() => null);
+        if (me?.user || me?.id) setCurrentUser(me.user || me);
+      }
+
+      const [postsRes, serversRes] = await Promise.all([
+        apiRequest("/posts").catch(() => null),
+        apiRequest("/servers").catch(() => null),
+      ]);
+
+      if (Array.isArray(postsRes) && postsRes.length > 0) {
+        setPosts(postsRes);
+      } else if (postsRes?.posts?.length > 0) {
+        setPosts(postsRes.posts);
+      }
+
+      if (Array.isArray(serversRes) && serversRes.length > 0) {
+        setServers(serversRes);
+        setActiveServer(serversRes[0]);
+        if (serversRes[0].groups?.length > 0) {
+          setActiveGroup(serversRes[0].groups[0]);
+        }
+      }
+    } catch {
+      // Gracefully retain fallback spatial data when backend is offline
+    }
+  }
+
+  // Open a Group or DM in Center Stage smoothly
+  async function handleSelectGroup(group, serverObj = activeServer) {
+    if (serverObj) setActiveServer(serverObj);
+    setActiveGroup(group);
+    setCenterMode("chat");
+    setMobileWingOpen(false);
+
+    if (socketRef.current && group?.id) {
+      socketRef.current.emit("join_group", group.id);
+    }
+
+    try {
+      const res = await apiRequest(`/servers/groups/${group.id}/chat`);
+      if (Array.isArray(res)) setMessages(res);
+      else if (Array.isArray(res?.messages)) setMessages(res.messages);
+    } catch {
+      // Keep existing or demo messages if endpoint is unreachable
+    }
+  }
+
+  // Send Live Chat Message
+  async function handleSendChat(e) {
     e.preventDefault();
-    if (!answerInput.trim() || !activePost) return;
-    if (!currentUser) return setActiveModal("AUTH");
+    if (!chatInput.trim() || !activeGroup) return;
+
+    const optimisticMsg = {
+      _id: `local-${Date.now()}`,
+      group_id: activeGroup.id,
+      sender_id: currentUser?.id || "guest",
+      sender_name: currentUser?.username || currentUser?.name || "You",
+      content: chatInput.trim(),
+      createdAt: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, optimisticMsg]);
+    setChatInput("");
+
+    if (socketRef.current?.connected) {
+      socketRef.current.emit("send_group_message", {
+        groupId: activeGroup.id,
+        senderId: currentUser?.id || "guest",
+        senderName: currentUser?.username || "Developer",
+        content: optimisticMsg.content,
+      });
+    }
 
     try {
-      await apiRequest(`/api/posts/${activePost.id}/comments`, {
+      await apiRequest(`/servers/groups/${activeGroup.id}/chat`, {
         method: "POST",
-        body: JSON.stringify({ body_markdown: answerInput }),
+        body: JSON.stringify({ content: optimisticMsg.content }),
       });
-      setAnswerInput("");
-      await handleSelectPost(activePost);
-    } catch (err) {
-      alert(err.message);
-    }
-  };
+    } catch {}
+  }
 
-  // Upvote / Downvote Handler (Calls Atomic PostgreSQL Transaction)
-  const handleVote = async (target_type, target_id, vote_value) => {
-    if (!currentUser) return setActiveModal("AUTH");
+  // Inline Quick Post Creation
+  async function handleQuickPost(e) {
+    e.preventDefault();
+    if (!quickText.trim()) return;
+
+    const firstLine = quickText.trim().split("\n")[0].slice(0, 72);
+    const parsedTags = quickTags
+      .split(",")
+      .map((t) => t.trim().replace(/^#/, ""))
+      .filter(Boolean);
+
+    const newPost = {
+      id: `post-${Date.now()}`,
+      title: firstLine,
+      content: quickCodeMode ? `${quickText}\n` : quickText,
+      author_name: currentUser?.name || currentUser?.username || "Sufiyan Ahmad",
+      author_username: currentUser?.username || "sufiyan",
+      created_at: new Date().toISOString(),
+      tags: parsedTags.length ? parsedTags : ["general"],
+      upvotes: 1,
+      comment_count: 0,
+      media_urls: quickImageUrl.trim() ? [quickImageUrl.trim()] : [],
+      comments: [],
+    };
+
+    setPosts((prev) => [newPost, ...prev]);
+    setQuickText("");
+    setQuickTags("");
+    setQuickImageUrl("");
+    setShowImageInput(false);
+
     try {
-      await apiRequest("/api/posts/vote", {
+      await apiRequest("/posts", {
         method: "POST",
-        body: JSON.stringify({ target_type, target_id, vote_value }),
+        body: JSON.stringify({
+          title: newPost.title,
+          content: newPost.content,
+          tags: newPost.tags,
+          media_urls: newPost.media_urls,
+        }),
       });
-      if (activeGroup) {
-        const postsRes = await apiRequest(
-          `/api/posts?groupId=${activeGroup.id}&sort=${feedSort}`,
-        );
-        setPosts(postsRes.posts || []);
-      }
-      if (activePost) {
-        await handleSelectPost(activePost);
-      }
-    } catch (err) {
-      alert(err.message);
-    }
-  };
+      fetchInitialData();
+    } catch {}
+  }
 
-  // Mark Accepted Answer (Post Author Only)
-  const handleAcceptAnswer = async (commentId) => {
-    if (!currentUser || !activePost) return;
+  // Upvote / Downvote Post
+  async function handleVote(postId, delta = 1) {
+    setPosts((prev) =>
+      prev.map((p) =>
+        p.id === postId ? { ...p, upvotes: (Number(p.upvotes) || 0) + delta } : p
+      )
+    );
     try {
-      await apiRequest(`/api/posts/${activePost.id}/accept/${commentId}`, {
-        method: "PATCH",
+      await apiRequest("/posts/vote", {
+        method: "POST",
+        body: JSON.stringify({ postId, voteType: delta > 0 ? "upvote" : "downvote" }),
       });
-      await handleSelectPost(activePost);
-    } catch (err) {
-      alert(err.message);
-    }
-  };
+    } catch {}
+  }
 
-  // Delete Own Post (Access Control Requirement)
-  const handleDeletePost = async (postId) => {
-    if (!confirm("Delete your post permanently?")) return;
+  // Add Comment / Answer to Post
+  async function handleAddComment(postId) {
+    if (!commentDraft.trim()) return;
+    const newComment = {
+      id: `c-${Date.now()}`,
+      author_name: currentUser?.name || currentUser?.username || "Sufiyan Ahmad",
+      author_username: currentUser?.username || "sufiyan",
+      content: commentDraft.trim(),
+      is_accepted: false,
+      created_at: new Date().toISOString(),
+    };
+
+    setPosts((prev) =>
+      prev.map((p) => {
+        if (p.id !== postId) return p;
+        const updatedComments = [...(p.comments || []), newComment];
+        return {
+          ...p,
+          comments: updatedComments,
+          comment_count: updatedComments.length,
+        };
+      })
+    );
+    setCommentDraft("");
+  }
+
+  // Mark Accepted Answer (Problem Statement 6 Requirement)
+  function handleToggleAccepted(postId, commentId) {
+    setPosts((prev) =>
+      prev.map((p) => {
+        if (p.id !== postId) return p;
+        return {
+          ...p,
+          comments: (p.comments || []).map((c) => ({
+            ...c,
+            is_accepted: c.id === commentId ? !c.is_accepted : false,
+          })),
+        };
+      })
+    );
+  }
+
+  // Toggle Bookmark
+  function toggleBookmark(postId) {
+    setBookmarkedIds((prev) => {
+      const next = prev.includes(postId)
+        ? prev.filter((id) => id !== postId)
+        : [...prev, postId];
+      localStorage.setItem("spatial_bookmarks", JSON.stringify(next));
+      return next;
+    });
+  }
+
+  // Delete Post
+  async function handleDeletePost(postId) {
+    setPosts((prev) => prev.filter((p) => p.id !== postId));
     try {
-      await apiRequest(`/api/posts/${postId}`, { method: "DELETE" });
-      handleSelectGroup(activeGroup);
-    } catch (err) {
-      alert(err.message);
-    }
-  };
+      await apiRequest(`/posts/${postId}`, { method: "DELETE" });
+    } catch {}
+  }
 
-  // Open Any Developer's Profile & Activity Modal
-  const openUserProfile = async (username) => {
-    try {
-      const res = await apiRequest(`/api/auth/profile/${username}`);
-      setViewedProfile(res.profile);
-      setActiveModal("USER_PROFILE");
-    } catch (err) {
-      console.error(err);
-    }
-  };
-  const handleLogout = async () => {
-    await apiRequest("/api/auth/logout", { method: "POST" }).catch(() => {});
-    localStorage.removeItem("spatial_token");
-    setCurrentUser(null);
-  };
+  // Filtered & Sorted Posts
+  const visiblePosts = useMemo(() => {
+    let list = [...posts];
 
-  const displayedServers =
-    joinedServers.length > 0 ? joinedServers : allServers;
+    if (navTab === "bookmarks") {
+      list = list.filter((p) => bookmarkedIds.includes(p.id));
+    }
+    if (selectedTag) {
+      list = list.filter((p) =>
+        (p.tags || []).some((t) => t.toLowerCase() === selectedTag.toLowerCase())
+      );
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter(
+        (p) =>
+          p.title?.toLowerCase().includes(q) ||
+          p.content?.toLowerCase().includes(q) ||
+          p.author_name?.toLowerCase().includes(q) ||
+          (p.tags || []).some((t) => t.toLowerCase().includes(q))
+      );
+    }
+    if (feedFilter === "following") {
+      list.sort((a, b) => (Number(b.upvotes) || 0) - (Number(a.upvotes) || 0));
+    } else {
+      list.sort(
+        (a, b) =>
+          new Date(b.created_at || 0).getTime() -
+          new Date(a.created_at || 0).getTime()
+      );
+    }
+    return list;
+  }, [posts, navTab, bookmarkedIds, selectedTag, searchQuery, feedFilter]);
+
+  const allTags = useMemo(() => {
+    const set = new Set();
+    posts.forEach((p) => (p.tags || []).forEach((t) => set.add(t)));
+    return Array.from(set);
+  }, [posts]);
 
   return (
-    <div
-      className="relative w-screen h-screen overflow-hidden select-none bg-zinc-950 text-white font-sans"
-      style={{
-        backgroundImage: `url('${bgImage}')`,
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-      }}
-    >
-      {/* Subtle Ambient Vignette Overlay for Glass Contrast */}
-      <div className="absolute inset-0 bg-black/35 pointer-events-none" />
+    <div className="relative w-screen h-dvh overflow-hidden select-none flex flex-col items-center justify-between py-3 px-3 sm:px-6">
+      {/* Immersive Room Background with Natural Vignette */}
+      <div
+        className="fixed inset-0 bg-cover bg-center transition-all duration-700 scale-105"
+        style={{ backgroundImage: `url(${bgImage})` }}
+      />
+      <div className="fixed inset-0 bg-black/35 backdrop-blur-[2px] pointer-events-none" />
 
-      {/* =====================================================================
-          1. TOP FLOATING SPATIAL SEARCH BAR (Mirrors Reference Image Top Pill)
-      ====================================================================== */}
-      <header className="relative z-30 pt-5 flex justify-center px-4">
-        <div className="spatial-glass-pill w-full max-w-xl h-14 rounded-full px-4 flex items-center justify-between gap-3">
-          {/* Left Community Brand Icon */}
+      {/* =========================================================
+          1. TOP FLOATING VISIONOS SEARCH PILL (Matches spatialui.webp)
+         ========================================================= */}
+      <header className="relative z-30 w-full max-w-[660px] vision-pill rounded-full px-3.5 py-2 flex items-center justify-between gap-3">
+        {/* Left Blue Circular App Badge */}
+        <button
+          onClick={() => {
+            setCenterMode("feed");
+            setNavTab("home");
+            setSelectedTag(null);
+          }}
+          className="vision-btn w-9 h-9 rounded-full bg-[#1d9bf0] flex items-center justify-center text-white shadow-md shrink-0"
+          title="Home Feed"
+        >
+          <Code2 className="w-5 h-5" />
+        </button>
+
+        {/* Centered Pill Search Input */}
+        <div className="relative flex-1 max-w-[380px]">
+          <Search className="w-4 h-4 text-white/50 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search on SpatialDev..."
+            className="w-full bg-black/25 hover:bg-black/35 focus:bg-black/45 text-sm text-white placeholder:text-white/55 rounded-full pl-9 pr-4 py-1.5 border border-white/12 focus:border-white/30 outline-none transition-all"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-white/50 hover:text-white"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        {/* Right Fullscreen / Auth Controls */}
+        <div className="flex items-center gap-2 shrink-0">
+          {currentUser ? (
+            <button
+              onClick={() => {
+                setViewedProfile(currentUser);
+                setActiveModal("profile");
+              }}
+              className="vision-btn hidden sm:flex items-center gap-2 bg-white/10 hover:bg-white/18 px-3 py-1.5 rounded-full text-xs font-medium border border-white/10"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              {currentUser.username || currentUser.name}
+            </button>
+          ) : (
+            <button
+              onClick={() => setActiveModal("auth")}
+              className="vision-btn bg-white/14 hover:bg-white/22 text-white text-xs font-medium px-3.5 py-1.5 rounded-full border border-white/15"
+            >
+              Sign in
+            </button>
+          )}
+
           <button
-            onClick={() => setFocusedStage("GROUPS_IN_CENTER")}
-            className="w-9 h-9 rounded-full bg-sky-500 flex items-center justify-center shadow-md shadow-sky-500/40 shrink-0 hover:scale-105 transition"
-            title="Reset Spatial View"
+            onClick={() => setIsFullscreen((prev) => !prev)}
+            className="vision-btn w-9 h-9 rounded-full bg-white/12 hover:bg-white/20 flex items-center justify-center text-white/85 border border-white/10"
+            title="Toggle Expanded Stage"
           >
-            <Code2 className="w-5 h-5 text-white" />
-          </button>
-
-          {/* Center Omni-Search Input */}
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 text-white/50 absolute left-3.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search people, groups, servers, or #tags..."
-              className="w-full pl-9 pr-4 py-1.5 rounded-full bg-black/25 border border-white/15 text-xs text-white placeholder-white/50 focus:outline-none focus:border-white/40"
-            />
-
-            {/* Live Omni-Search Dropdown Results */}
-            {searchResults && (
-              <div className="absolute top-11 left-0 right-0 spatial-glass rounded-2xl p-3 space-y-3 max-h-80 overflow-y-auto z-50 border border-white/25">
-                <div className="flex justify-between items-center text-[11px] text-white/50 px-1">
-                  <span>GLOBAL OMNI-SEARCH RESULTS</span>
-                  <button
-                    onClick={() => setSearchResults(null)}
-                    className="text-sky-400"
-                  >
-                    Close
-                  </button>
-                </div>
-
-                {searchResults.servers?.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-bold text-amber-300 uppercase px-1 mb-1">
-                      Servers
-                    </div>
-                    {searchResults.servers.map((s) => (
-                      <div
-                        key={s.id}
-                        onClick={() => {
-                          handleSelectServer(s);
-                          setSearchResults(null);
-                        }}
-                        className="p-2 rounded-xl hover:bg-white/10 cursor-pointer flex items-center gap-2 text-xs"
-                      >
-                        <span className="w-6 h-6 rounded-full bg-white/15 flex items-center justify-center font-bold text-[10px]">
-                          {s.monogram}
-                        </span>
-                        <span>{s.name}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {searchResults.groups?.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-bold text-emerald-300 uppercase px-1 mb-1">
-                      Groups
-                    </div>
-                    {searchResults.groups.map((g) => (
-                      <div
-                        key={g.id}
-                        onClick={() => {
-                          handleSelectGroup(g, true);
-                          setSearchResults(null);
-                        }}
-                        className="p-2 rounded-xl hover:bg-white/10 cursor-pointer text-xs flex justify-between"
-                      >
-                        <span>#{g.name}</span>
-                        <span className="text-white/40 text-[10px]">
-                          {g.server_name}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {searchResults.people?.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-bold text-sky-300 uppercase px-1 mb-1">
-                      Developers
-                    </div>
-                    {searchResults.people.map((u) => (
-                      <div
-                        key={u.id}
-                        onClick={() => {
-                          openUserProfile(u.username);
-                          setSearchResults(null);
-                        }}
-                        className="p-2 rounded-xl hover:bg-white/10 cursor-pointer text-xs flex justify-between"
-                      >
-                        <span>@{u.username}</span>
-                        <span className="text-amber-300 text-[10px]">
-                          ★ {u.reputation}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {searchResults.posts?.length > 0 && (
-                  <div>
-                    <div className="text-[10px] font-bold text-purple-300 uppercase px-1 mb-1">
-                      Posts & Questions
-                    </div>
-                    {searchResults.posts.map((p) => (
-                      <div
-                        key={p.id}
-                        onClick={() => {
-                          handleSelectPost(p);
-                          setRightPanelTab("QA_THREAD");
-                          setFocusedStage("CHAT_IN_CENTER");
-                          setSearchResults(null);
-                        }}
-                        className="p-2 rounded-xl hover:bg-white/10 cursor-pointer text-xs truncate"
-                      >
-                        {p.title}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Right Action: Swap Focus / Expand Stage Button */}
-          <button
-            onClick={() =>
-              setFocusedStage(
-                focusedStage === "GROUPS_IN_CENTER"
-                  ? "CHAT_IN_CENTER"
-                  : "GROUPS_IN_CENTER",
-              )
-            }
-            className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition shrink-0"
-            title="Swap Center & Right Spatial Panels"
-          >
-            {focusedStage === "GROUPS_IN_CENTER" ? (
-              <Maximize2 className="w-4 h-4 text-white/80" />
+            {isFullscreen ? (
+              <Minimize2 className="w-4 h-4" />
             ) : (
-              <Minimize2 className="w-4 h-4 text-sky-400" />
+              <Maximize2 className="w-4 h-4" />
             )}
           </button>
         </div>
       </header>
 
-      {/* =====================================================================
-          2. MAIN SPATIAL 3D STAGE (Left Docks + Center Panel + Right Tilted Wing)
-      ====================================================================== */}
-      <main className="spatial-stage relative z-20 flex items-center justify-center gap-4 px-6 pt-4 pb-20 h-[calc(100vh-88px)] max-w-[1600px] mx-auto">
-        {/* -------------------------------------------------------------------
-            A. LEFT FLOATING VERTICAL DOCKS (Primary Dock + Server Bar + Collapsed Group Bar)
-        -------------------------------------------------------------------- */}
-        <div className="flex items-center gap-2.5 shrink-0 h-full max-h-[560px]">
-          {/* Dock 1: Primary Navigation Pill (Home, Search, Notifications, Create, Joined Servers Arrow, Settings) */}
-          <aside className="spatial-glass-pill w-14 py-5 rounded-full flex flex-col items-center justify-between h-full">
-            <div className="flex flex-col items-center gap-4">
-              {/* Home Button */}
+      {/* =========================================================
+          2. MAIN SPATIAL 3D WORKSPACE (Left Dock + Monogram + Center + Right 3D Wing)
+         ========================================================= */}
+      <main
+        className={`relative z-20 w-full flex-1 min-h-0 flex items-center justify-center gap-4 lg:gap-6 my-2 spatial-stage ${
+          isFullscreen ? "max-w-[1600px]" : "max-w-[1360px]"
+        }`}
+      >
+        {/* 2A. LEFT FLOATING VERTICAL ICON PILL (Desktop - Matches spatialui.webp) */}
+        <aside className="hidden md:flex flex-col items-center gap-2.5 vision-pill rounded-full py-3.5 px-2.5 shrink-0">
+          {[
+            { id: "home", icon: Home, label: "Home", action: () => { setNavTab("home"); setCenterMode("feed"); } },
+            { id: "search", icon: Search, label: "Explore Tags", action: () => { setNavTab("search"); setCenterMode("feed"); } },
+            { id: "notifications", icon: Bell, label: "Notifications", action: () => setNavTab("notifications") },
+            { id: "messages", icon: Mail, label: "Spatial Channels", action: () => setCenterMode(centerMode === "chat" ? "feed" : "chat") },
+            { id: "bookmarks", icon: Bookmark, label: "Saved Posts", action: () => { setNavTab("bookmarks"); setCenterMode("feed"); } },
+            { id: "settings", icon: Settings, label: "Environment", action: () => setActiveModal("background") },
+          ].map((item) => {
+            const Icon = item.icon;
+            const isActive =
+              (item.id === "messages" && centerMode === "chat") ||
+              (item.id !== "messages" && navTab === item.id && centerMode === "feed");
+            return (
               <button
-                onClick={() => setFocusedStage("GROUPS_IN_CENTER")}
-                className={`w-10 h-10 rounded-full flex items-center justify-center transition ${
-                  focusedStage === "GROUPS_IN_CENTER"
-                    ? "bg-white/25 text-white shadow-inner"
+                key={item.id}
+                onClick={item.action}
+                title={item.label}
+                className={`vision-btn w-10 h-10 rounded-full flex items-center justify-center transition-all ${
+                  isActive
+                    ? "bg-white/24 text-white shadow-inner border border-white/25"
                     : "text-white/65 hover:text-white hover:bg-white/10"
                 }`}
-                title="Home / Groups View"
               >
-                <Home className="w-4 h-4" />
+                <Icon className="w-[19px] h-[19px]" />
               </button>
+            );
+          })}
+        </aside>
 
-              {/* My Joined Servers Toggle (Arrow turns ▸ to ▾ and opens Server Monogram Bar!) */}
-              <button
-                onClick={() => setIsServersExpanded(!isServersExpanded)}
-                className={`w-10 h-10 rounded-full flex flex-col items-center justify-center transition ${
-                  isServersExpanded
-                    ? "bg-sky-500/30 text-sky-300 border border-sky-400/40"
-                    : "text-white/65 hover:bg-white/10"
-                }`}
-                title="My Joined Servers (Toggle Vertical Server Bar)"
-              >
-                <Layers className="w-3.5 h-3.5" />
-                <ChevronRight
-                  className={`w-3.5 h-3.5 transition-transform duration-300 ${
-                    isServersExpanded ? "rotate-90 text-sky-300" : "rotate-0"
-                  }`}
-                />
-              </button>
-
-              {/* Notifications Bell */}
-              <div className="relative">
-                <button
-                  onClick={() => setShowNotifications(!showNotifications)}
-                  className="w-10 h-10 rounded-full flex items-center justify-center text-white/65 hover:text-white hover:bg-white/10 transition"
-                  title="Notifications"
-                >
-                  <Bell className="w-4 h-4" />
-                  {notifications.length > 0 && (
-                    <span className="w-2 h-2 rounded-full bg-rose-500 absolute top-2 right-2.5" />
-                  )}
-                </button>
-
-                {showNotifications && (
-                  <div className="absolute left-14 top-0 w-72 spatial-glass rounded-2xl p-3 z-50 space-y-2 border border-white/25">
-                    <div className="text-xs font-semibold text-white/80 px-1">
-                      Live Notifications
-                    </div>
-                    {notifications.length === 0 ? (
-                      <div className="text-xs text-white/50 p-2">
-                        No notifications yet.
-                      </div>
-                    ) : (
-                      notifications.map((n) => (
-                        <div
-                          key={n._id}
-                          className="p-2 rounded-xl bg-white/5 text-xs text-white/85"
-                        >
-                          {n.message}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Create Server / Group / Post (+) */}
-              <button
-                onClick={() =>
-                  setActiveModal(currentUser ? "CREATE_HUB" : "AUTH")
-                }
-                className="w-10 h-10 rounded-full bg-sky-500/20 hover:bg-sky-500/40 border border-sky-400/30 flex items-center justify-center text-sky-300 transition"
-                title="Create Server, Group, or Post"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Bottom Icons: Profile / Settings / Auth */}
-            <div className="flex flex-col items-center gap-3">
-              {currentUser ? (
-                <button
-                  onClick={() => openUserProfile(currentUser.username)}
-                  className="w-9 h-9 rounded-full bg-gradient-to-tr from-sky-500 to-indigo-500 text-xs font-bold flex items-center justify-center shadow-md"
-                  title={`Logged in as @${currentUser.username}`}
-                >
-                  {currentUser.username.slice(0, 2).toUpperCase()}
-                </button>
-              ) : (
-                <button
-                  onClick={() => setActiveModal("AUTH")}
-                  className="w-10 h-10 rounded-full bg-emerald-500/25 border border-emerald-400/40 flex items-center justify-center text-emerald-300 hover:bg-emerald-500/40 transition"
-                  title="Login / Register"
-                >
-                  <LogIn className="w-4 h-4" />
-                </button>
-              )}
-              {currentUser && (
-                <button
-                  onClick={handleLogout}
-                  className="w-9 h-9 rounded-full bg-rose-500/20 hover:bg-rose-500/40 border border-rose-400/30 flex items-center justify-center text-rose-300 transition"
-                  title="Logout"
-                >
-                  <LogOut className="w-4 h-4" />
-                </button>
-              )}
-
-              <button
-                onClick={() => setActiveModal("SETTINGS")}
-                className="w-10 h-10 rounded-full flex items-center justify-center text-white/65 hover:text-white hover:bg-white/10 transition"
-                title="Settings & Custom Background"
-              >
-                <Settings className="w-4 h-4" />
-              </button>
-            </div>
-          </aside>
-
-          {/* Dock 2: Collapsible Server Monogram Vertical Bar (Appears when arrow points down ▾) */}
-          <div
-            className={`spatial-glass-pill rounded-full flex flex-col items-center py-4 gap-3 overflow-y-auto spatial-panel-transition h-full ${
-              isServersExpanded
-                ? "w-14 opacity-100 translate-x-0 px-2"
-                : "w-0 opacity-0 -translate-x-4 px-0 pointer-events-none border-0"
-            }`}
+        {/* 2B. SMOOTH MORPHING MONOGRAM SIDEBAR (Glides open when a Group/Chat is active) */}
+        <div
+          className={`hidden sm:flex flex-col items-center vision-window rounded-[28px] overflow-hidden shrink-0 transition-all duration-500 ${
+            centerMode === "chat"
+              ? "w-16 py-4 px-2 opacity-100 translate-x-0"
+              : "w-0 py-0 px-0 opacity-0 -translate-x-4 pointer-events-none border-0"
+          }`}
+        >
+          {/* Back to Feed Monogram Button */}
+          <button
+            onClick={() => setCenterMode("feed")}
+            className="vision-btn w-11 h-11 rounded-2xl bg-[#1d9bf0] text-white flex items-center justify-center font-semibold text-xs mb-3 shadow-md"
+            title="Return to Feed"
           >
-            <span className="text-[9px] font-bold uppercase tracking-widest text-white/40">
-              Srv
-            </span>
-            {displayedServers.map((srv) => {
-              const isSelected = activeServer?.id === srv.id;
+            <ArrowLeft className="w-4 h-4" />
+          </button>
+
+          <div className="w-6 h-[1px] bg-white/15 mb-3" />
+
+          {/* Server & Channel Monograms */}
+          <div className="flex flex-col gap-2.5 overflow-y-auto items-center w-full">
+            {servers.map((srv) => {
+              const initials = srv.name
+                .split(" ")
+                .map((w) => w[0])
+                .join("")
+                .slice(0, 2)
+                .toUpperCase();
+              const isCurrentServer = activeServer?.id === srv.id;
               return (
                 <button
                   key={srv.id}
-                  onClick={() => handleSelectServer(srv)}
-                  className={`w-10 h-10 rounded-full font-bold text-xs flex items-center justify-center transition-all shrink-0 ${
-                    isSelected
-                      ? "bg-sky-500 text-white ring-2 ring-white/70 scale-105 shadow-lg shadow-sky-500/30"
-                      : "bg-white/10 text-white/75 hover:bg-white/20 hover:text-white"
-                  }`}
+                  onClick={() => {
+                    setActiveServer(srv);
+                    if (srv.groups?.[0]) handleSelectGroup(srv.groups[0], srv);
+                  }}
                   title={srv.name}
+                  className={`vision-btn w-11 h-11 rounded-2xl flex items-center justify-center text-xs font-bold transition-all ${
+                    isCurrentServer
+                      ? "bg-white text-black shadow-lg scale-105"
+                      : "bg-white/10 text-white/80 hover:bg-white/20"
+                  }`}
                 >
-                  {srv.monogram}
+                  {initials}
                 </button>
               );
             })}
-          </div>
 
-          {/* Dock 3: Adjacent Collapsed Groups Monogram Bar!
-              (Appears automatically when Right Chat Panel comes to Center Stage!) */}
-          <div
-            className={`spatial-glass-pill rounded-full flex flex-col items-center py-4 gap-2.5 overflow-y-auto spatial-panel-transition h-full ${
-              focusedStage === "CHAT_IN_CENTER"
-                ? "w-14 opacity-100 translate-x-0 px-2"
-                : "w-0 opacity-0 -translate-x-4 px-0 pointer-events-none border-0"
-            }`}
-          >
-            <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-300/70">
-              Grp
-            </span>
-            {serverGroups.map((grp) => {
+            <div className="w-6 h-[1px] bg-white/15 my-1" />
+
+            {(activeServer?.groups || []).map((grp) => {
+              const mono = grp.name.slice(0, 2).toUpperCase();
               const isSelected = activeGroup?.id === grp.id;
-              const grpMonogram = grp.name
-                .split("-")
-                .map((w) => w[0])
-                .join("")
-                .toUpperCase()
-                .slice(0, 3);
               return (
                 <button
                   key={grp.id}
-                  onClick={() => handleSelectGroup(grp, true)}
-                  className={`w-10 h-10 rounded-2xl font-mono font-bold text-[11px] flex items-center justify-center transition-all shrink-0 ${
+                  onClick={() => handleSelectGroup(grp, activeServer)}
+                  title={`#${grp.name}`}
+                  className={`vision-btn w-10 h-10 rounded-full flex items-center justify-center text-[11px] font-semibold border transition-all ${
                     isSelected
-                      ? "bg-emerald-500 text-white ring-2 ring-white/60 scale-105"
-                      : "bg-white/10 text-white/70 hover:bg-white/20"
+                      ? "bg-[#1d9bf0]/30 border-[#1d9bf0] text-white"
+                      : "bg-black/25 border-white/10 text-white/65 hover:text-white"
                   }`}
-                  title={`#${grp.name} (Click to switch group, double-click to expand groups to center)`}
-                  onDoubleClick={() => setFocusedStage("GROUPS_IN_CENTER")}
                 >
-                  #{grpMonogram}
+                  {mono}
                 </button>
               );
             })}
+
             <button
-              onClick={() => setFocusedStage("GROUPS_IN_CENTER")}
-              className="mt-auto w-9 h-9 rounded-full bg-white/10 hover:bg-white/25 flex items-center justify-center text-white/70 text-xs"
-              title="Restore Groups Panel to Center Stage"
+              onClick={() => setActiveModal("createGroup")}
+              className="vision-btn w-10 h-10 rounded-full bg-white/8 hover:bg-white/16 flex items-center justify-center text-white/70 mt-1"
+              title="Create Channel"
             >
-              <Maximize2 className="w-3.5 h-3.5" />
+              <Plus className="w-4 h-4" />
             </button>
           </div>
         </div>
 
-        {/* -------------------------------------------------------------------
-            B. CENTER STAGE PANEL
-            When focusedStage === 'GROUPS_IN_CENTER': Shows Server's Groups & Questions Feed
-            When focusedStage === 'CHAT_IN_CENTER': The Group's People Chat / Q&A Thread glides here!
-        -------------------------------------------------------------------- */}
-        {focusedStage === "GROUPS_IN_CENTER" ? (
-          /* === CENTER STATE 1: SERVER GROUPS & QUESTIONS FEED === */
-          <section className="spatial-glass spatial-panel-transition flex-1 max-w-3xl h-full rounded-[34px] flex flex-col overflow-hidden">
-            {/* Panel Header (Mirrors "Home | For you | Following" in VisionOS Reference) */}
-            <div className="px-6 pt-5 pb-3 border-b border-white/10 flex items-center justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="px-2.5 py-0.5 rounded-full bg-sky-500/25 border border-sky-400/30 text-sky-300 text-xs font-bold">
-                    {activeServer?.monogram || "SRV"}
-                  </span>
-                  <h1 className="text-lg font-bold tracking-tight">
-                    {activeServer?.name || "Select a Community"}
+        {/* 2C. CENTER MAIN VISIONOS WINDOW (Persistent Container — Smoothly Crossfades Feed <-> Chat) */}
+        <section
+          className={`vision-window spatial-center-stage rounded-[32px] h-full flex flex-col overflow-hidden flex-1 ${
+            isFullscreen ? "max-w-[960px]" : "max-w-[680px]"
+          }`}
+        >
+          {centerMode === "feed" ? (
+            /* ==================== COMMUNITY FEED VIEW ==================== */
+            <div className="flex flex-col h-full animate-fadeIn">
+              {/* Header Bar — Matches spatialui.webp ("Home", "For you" blue pill + underline, "Following") */}
+              <div className="px-6 pt-5 pb-3 border-b border-white/[0.08] flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <h1 className="text-xl font-bold tracking-tight text-white">
+                    {navTab === "bookmarks"
+                      ? "Bookmarks"
+                      : navTab === "notifications"
+                      ? "Activity"
+                      : "Home"}
                   </h1>
-                </div>
-                <p className="text-xs text-white/55 mt-0.5">
-                  {activeServer?.description}
-                </p>
-              </div>
-
-              {/* Feed Sorting Tabs (Newest vs Top - Required by PS 06) */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setFeedSort("newest")}
-                  className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${
-                    feedSort === "newest"
-                      ? "bg-sky-500 text-white shadow-md shadow-sky-500/30"
-                      : "bg-white/10 text-white/70 hover:bg-white/15"
-                  }`}
-                >
-                  Newest
-                </button>
-                <button
-                  onClick={() => setFeedSort("top")}
-                  className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${
-                    feedSort === "top"
-                      ? "bg-sky-500 text-white shadow-md shadow-sky-500/30"
-                      : "bg-white/10 text-white/70 hover:bg-white/15"
-                  }`}
-                >
-                  Top Voted
-                </button>
-              </div>
-            </div>
-
-            {/* Horizontal Discord-Style Groups Pill Bar inside the Server */}
-            <div className="px-6 py-3 bg-black/20 border-b border-white/10 flex items-center gap-2 overflow-x-auto">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-white/40 mr-1">
-                Groups:
-              </span>
-              {serverGroups.map((grp) => {
-                const isSelected = activeGroup?.id === grp.id;
-                return (
-                  <button
-                    key={grp.id}
-                    onClick={() => handleSelectGroup(grp, false)}
-                    className={`px-3.5 py-1.5 rounded-full text-xs font-medium flex items-center gap-1.5 transition shrink-0 ${
-                      isSelected
-                        ? "bg-white text-zinc-900 font-semibold shadow"
-                        : "bg-white/10 text-white/75 hover:bg-white/20"
-                    }`}
-                  >
-                    <Hash className="w-3.5 h-3.5 opacity-70" />
-                    <span>{grp.name}</span>
-                    <span className="text-[10px] opacity-60">
-                      ({grp.post_count || 0})
-                    </span>
-                  </button>
-                );
-              })}
-
-              <button
-                onClick={() =>
-                  setActiveModal(currentUser ? "CREATE_HUB" : "AUTH")
-                }
-                className="px-3 py-1.5 rounded-full bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/30 text-emerald-300 text-xs font-medium shrink-0 ml-auto"
-              >
-                + New Group / Post
-              </button>
-            </div>
-
-            {/* Active Tag Filter Banner */}
-            {selectedTag && (
-              <div className="px-6 py-1.5 bg-sky-500/20 flex items-center justify-between text-xs">
-                <span>
-                  Filtering by tag: <strong>#{selectedTag}</strong>
-                </span>
-                <button
-                  onClick={() => setSelectedTag("")}
-                  className="text-sky-300 hover:underline"
-                >
-                  Clear filter
-                </button>
-              </div>
-            )}
-
-            {/* Quick Composer Bar (Mirrors "What is Happening?" in VisionOS Reference) */}
-            <div className="px-6 py-3 border-b border-white/10 flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center font-bold text-xs shrink-0">
-                {currentUser
-                  ? currentUser.username.slice(0, 2).toUpperCase()
-                  : "?"}
-              </div>
-              <button
-                onClick={() =>
-                  setActiveModal(currentUser ? "CREATE_HUB" : "AUTH")
-                }
-                className="flex-1 text-left px-4 py-2 rounded-full bg-white/10 hover:bg-white/15 border border-white/15 text-xs text-white/60 transition"
-              >
-                Ask a technical question or share code in #
-                {activeGroup?.name || "group"}...
-              </button>
-            </div>
-
-            {/* Scrollable Posts & Questions Feed */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              {posts.length === 0 ? (
-                <div className="text-center py-12 text-white/50 text-sm">
-                  No questions posted in <strong>#{activeGroup?.name}</strong>{" "}
-                  yet. Click above to post the first one!
-                </div>
-              ) : (
-                posts.map((post) => (
-                  <article
-                    key={post.id}
-                    onClick={() => {
-                      handleSelectPost(post);
-                      setRightPanelTab("QA_THREAD");
-                    }}
-                    className={`p-4 rounded-2xl border transition cursor-pointer ${
-                      activePost?.id === post.id
-                        ? "bg-white/15 border-sky-400/50 shadow-lg"
-                        : "bg-black/25 border-white/10 hover:bg-white/10"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between text-xs text-white/60 mb-1.5">
-                      <div className="flex items-center gap-2">
-                        <span
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openUserProfile(post.author_username);
-                          }}
-                          className="font-semibold text-white hover:text-sky-300 cursor-pointer"
-                        >
-                          @{post.author_username}
-                        </span>
-                        <span className="text-amber-300/90 text-[11px]">
-                          ★ {post.author_reputation}
-                        </span>
-                        <span>•</span>
-                        <span>
-                          {new Date(post.created_at).toLocaleDateString()}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {post.accepted_comment_id && (
-                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[10px] flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3" /> Solved
-                          </span>
-                        )}
-                        {currentUser?.id === post.author_id && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeletePost(post.id);
-                            }}
-                            className="text-rose-400 hover:text-rose-300 p-1"
-                            title="Delete Own Post"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        {currentUser?.id === post.author_id && (
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setEditingPost(post);
-                                setActiveModal("EDIT_POST");
-                              }}
-                              className="text-sky-400 hover:text-sky-300 p-1"
-                              title="Edit Own Post"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeletePost(post.id);
-                              }}
-                              className="text-rose-400 hover:text-rose-300 p-1"
-                              title="Delete Own Post"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <h2 className="text-base font-semibold text-white mb-2">
-                      {post.title}
-                    </h2>
-
-                    {/* Render Markdown & Syntax Code Blocks */}
-                    <div className="line-clamp-4">
-                      {renderMarkdownElements(post.body_markdown)}
-                    </div>
-
-                    {/* Tags & Voting Footer */}
-                    <div className="mt-3 pt-2.5 border-t border-white/10 flex items-center justify-between">
-                      <div className="flex flex-wrap gap-1.5">
-                        {post.tags?.map((tag) => (
-                          <button
-                            key={tag}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedTag(tag);
-                            }}
-                            className="px-2.5 py-0.5 rounded-full bg-white/10 hover:bg-sky-500/30 text-[11px] text-sky-200 transition"
-                          >
-                            #{tag}
-                          </button>
-                        ))}
-                      </div>
-
-                      <div className="flex items-center gap-3 text-xs">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleVote("POST", post.id, 1);
-                          }}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/10 hover:bg-emerald-500/30 transition"
-                        >
-                          <ThumbsUp className="w-3.5 h-3.5 text-emerald-300" />
-                          <span>{post.score}</span>
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleVote("POST", post.id, -1);
-                          }}
-                          className="p-1 rounded-full bg-white/10 hover:bg-rose-500/30 transition"
-                        >
-                          <ThumbsDown className="w-3.5 h-3.5 text-rose-300" />
-                        </button>
-                        <span className="flex items-center gap-1 text-white/60">
-                          <MessageSquare className="w-3.5 h-3.5" />{" "}
-                          {post.comment_count || 0} answers
-                        </span>
-                      </div>
-                    </div>
-                  </article>
-                ))
-              )}
-            </div>
-          </section>
-        ) : (
-          /* === CENTER STATE 2: RIGHT GROUP CHAT & ANSWERS PANEL GLIDED TO CENTER STAGE! === */
-          <section className="spatial-glass spatial-panel-transition flex-1 max-w-4xl h-full rounded-[34px] flex flex-col overflow-hidden border-sky-400/30">
-            <div className="px-6 py-4 border-b border-white/15 flex items-center justify-between bg-black/20">
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setFocusedStage("GROUPS_IN_CENTER")}
-                  className="px-3 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs flex items-center gap-1.5 transition"
-                >
-                  ← Back to Groups
-                </button>
-                <div>
-                  <h2 className="text-base font-bold flex items-center gap-1.5">
-                    <Hash className="w-4 h-4 text-emerald-400" />
-                    {activeGroup?.name || "group-chat"}
-                    <span className="text-xs font-normal text-white/50 ml-1">
-                      ({activeServer?.name})
-                    </span>
-                  </h2>
-                </div>
-              </div>
-
-              {/* Mode Switcher: Live Group Chat vs Structured Q&A Answers */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setRightPanelTab("LIVE_CHAT")}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition ${
-                    rightPanelTab === "LIVE_CHAT"
-                      ? "bg-emerald-500 text-white"
-                      : "bg-white/10 text-white/70"
-                  }`}
-                >
-                  Live People Chat ({groupMessages.length})
-                </button>
-                <button
-                  onClick={() => setRightPanelTab("QA_THREAD")}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition ${
-                    rightPanelTab === "QA_THREAD"
-                      ? "bg-sky-500 text-white"
-                      : "bg-white/10 text-white/70"
-                  }`}
-                >
-                  Q&A Answers ({postComments.length})
-                </button>
-              </div>
-            </div>
-
-            {/* Body of Expanded Center Chat / Q&A */}
-            {rightPanelTab === "LIVE_CHAT" ? (
-              <div className="flex-1 flex flex-col overflow-hidden">
-                <div className="flex-1 overflow-y-auto p-6 space-y-3">
-                  {groupMessages.length === 0 ? (
-                    <div className="text-center py-12 text-white/40 text-xs">
-                      Start the live conversation in #{activeGroup?.name}!
-                      Messages sync in real time via Socket.io + MongoDB.
-                    </div>
-                  ) : (
-                    groupMessages.map((m, i) => (
-                      <div
-                        key={m._id || i}
-                        className="p-3.5 rounded-2xl bg-black/30 border border-white/10"
+                  {selectedTag && (
+                    <span className="inline-flex items-center gap-1.5 text-xs bg-[#1d9bf0]/25 text-[#68bfff] px-2.5 py-0.5 rounded-full border border-[#1d9bf0]/40">
+                      #{selectedTag}
+                      <button
+                        onClick={() => setSelectedTag(null)}
+                        className="hover:text-white"
                       >
-                        <div className="flex items-center justify-between text-xs mb-1">
-                          <span
-                            onClick={() => openUserProfile(m.senderUsername)}
-                            className="font-semibold text-emerald-300 hover:underline cursor-pointer"
-                          >
-                            @{m.senderUsername}
-                          </span>
-                          <span className="text-[10px] text-white/40">
-                            {new Date(
-                              m.createdAt || Date.now(),
-                            ).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                        </div>
-                        <p className="text-sm text-white/90">{m.content}</p>
-                        {m.codeSnippet && (
-                          <pre className="mt-2 p-2.5 rounded-xl bg-black/70 border border-white/10 text-xs font-mono text-sky-300 overflow-x-auto">
-                            <code>{m.codeSnippet}</code>
-                          </pre>
-                        )}
-                      </div>
-                    ))
+                        ×
+                      </button>
+                    </span>
                   )}
-                  <div ref={chatEndRef} />
                 </div>
 
-                {/* Live Chat Input Bar */}
+                {/* "For you" and "Following" Pills */}
+                <div className="flex items-center gap-3">
+                  <div className="relative flex flex-col items-center">
+                    <button
+                      onClick={() => setFeedFilter("foryou")}
+                      className={`vision-btn px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                        feedFilter === "foryou"
+                          ? "bg-[#1d9bf0] text-white shadow-sm"
+                          : "bg-white/8 text-white/70 hover:bg-white/14"
+                      }`}
+                    >
+                      For you
+                    </button>
+                    {feedFilter === "foryou" && (
+                      <span className="w-10 h-[3px] bg-[#1d9bf0] rounded-full mt-1.5" />
+                    )}
+                  </div>
+
+                  <div className="relative flex flex-col items-center">
+                    <button
+                      onClick={() => setFeedFilter("following")}
+                      className={`vision-btn px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                        feedFilter === "following"
+                          ? "bg-[#1d9bf0] text-white shadow-sm"
+                          : "bg-white/8 text-white/70 hover:bg-white/14 border border-white/10"
+                      }`}
+                    >
+                      Top Voted
+                    </button>
+                    {feedFilter === "following" && (
+                      <span className="w-10 h-[3px] bg-[#1d9bf0] rounded-full mt-1.5" />
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Tag Filter Strip (Shown when Explore/Search tab is active or tags exist) */}
+              {navTab === "search" && (
+                <div className="px-6 py-2.5 bg-black/15 border-b border-white/[0.08] flex items-center gap-2 overflow-x-auto shrink-0">
+                  <span className="text-xs text-white/50 shrink-0">Topics:</span>
+                  {allTags.map((tag) => (
+                    <button
+                      key={tag}
+                      onClick={() =>
+                        setSelectedTag(selectedTag === tag ? null : tag)
+                      }
+                      className={`px-3 py-1 rounded-full text-xs font-medium transition-all shrink-0 ${
+                        selectedTag === tag
+                          ? "bg-[#1d9bf0] text-white"
+                          : "bg-white/8 text-white/75 hover:bg-white/15"
+                      }`}
+                    >
+                      #{tag}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Scrollable Feed Content */}
+              <div className="flex-1 overflow-y-auto divide-y divide-white/[0.08]">
+                {/* Inline "What is happening?" Composer (Matches spatialui.webp) */}
                 <form
-                  onSubmit={handleSendGroupChat}
-                  className="p-4 bg-black/30 border-t border-white/10 space-y-2"
+                  onSubmit={handleQuickPost}
+                  className="px-6 py-4 space-y-3 bg-white/[0.01]"
                 >
-                  {showCodeBox && (
-                    <textarea
-                      rows={3}
-                      placeholder="Paste code snippet here..."
-                      value={codeInput}
-                      onChange={(e) => setCodeInput(e.target.value)}
-                      className="w-full p-2.5 rounded-xl bg-black/60 border border-white/15 text-xs font-mono text-emerald-300"
+                  <div className="flex items-center gap-3">
+                    <img
+                      src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${
+                        currentUser?.username || "sufiyan"
+                      }`}
+                      alt="Avatar"
+                      className="w-10 h-10 rounded-full bg-white/15 border border-white/20 shrink-0"
                     />
+                    <div className="flex-1">
+                      <input
+                        type="text"
+                        value={quickText}
+                        onChange={(e) => setQuickText(e.target.value)}
+                        placeholder="What is happening in your codebase?"
+                        className="w-full bg-white/[0.06] hover:bg-white/[0.09] focus:bg-white/[0.11] text-sm text-white placeholder:text-white/60 rounded-full px-5 py-2.5 border border-white/14 focus:border-white/30 outline-none transition-all"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Optional Media / Tag / Code Drawer */}
+                  {(showImageInput || quickCodeMode) && (
+                    <div className="pl-13 grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                      <input
+                        type="text"
+                        value={quickTags}
+                        onChange={(e) => setQuickTags(e.target.value)}
+                        placeholder="Tags (e.g. nextjs, postgres, cpp)"
+                        className="bg-black/25 text-xs text-white rounded-xl px-3 py-2 border border-white/12 outline-none"
+                      />
+                      <input
+                        type="url"
+                        value={quickImageUrl}
+                        onChange={(e) => setQuickImageUrl(e.target.value)}
+                        placeholder="Optional image URL (https://...)"
+                        className="bg-black/25 text-xs text-white rounded-xl px-3 py-2 border border-white/12 outline-none"
+                      />
+                    </div>
                   )}
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowCodeBox(!showCodeBox)}
-                      className="p-2.5 rounded-full bg-white/10 hover:bg-white/20 text-sky-300"
-                      title="Attach Code Snippet"
-                    >
-                      <Code2 className="w-4 h-4" />
-                    </button>
-                    <input
-                      type="text"
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      placeholder={`Message everyone in #${activeGroup?.name || "group"}...`}
-                      className="flex-1 px-4 py-2.5 rounded-full bg-black/40 border border-white/15 text-xs focus:outline-none focus:border-emerald-400"
-                    />
-                    <button
-                      type="submit"
-                      className="px-5 py-2.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-xs font-semibold flex items-center gap-1.5 transition"
-                    >
-                      <Send className="w-3.5 h-3.5" /> Send
-                    </button>
+
+                  {/* Composer Action Icons Row (Matches spatialui.webp) */}
+                  <div className="flex items-center justify-between pl-13">
+                    <div className="flex items-center gap-4 text-white/65">
+                      <button
+                        type="button"
+                        onClick={() => setShowImageInput((v) => !v)}
+                        className="hover:text-white transition-colors"
+                        title="Attach Image or Tags"
+                      >
+                        <ImageIcon className="w-[18px] h-[18px]" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setQuickCodeMode((v) => !v)}
+                        className={`transition-colors ${
+                          quickCodeMode ? "text-[#1d9bf0]" : "hover:text-white"
+                        }`}
+                        title="Format as Code Block"
+                      >
+                        <Code2 className="w-[18px] h-[18px]" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveModal("createPost")}
+                        className="hover:text-white transition-colors"
+                        title="Open Full Markdown Editor"
+                      >
+                        <ListFilter className="w-[18px] h-[18px]" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setQuickText((t) => `${t} 🚀`)}
+                        className="hover:text-white transition-colors"
+                        title="Add Reaction"
+                      >
+                        <Smile className="w-[18px] h-[18px]" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setNavTab("search")}
+                        className="hover:text-white transition-colors"
+                        title="Filter Topics"
+                      >
+                        <Calendar className="w-[18px] h-[18px]" />
+                      </button>
+                    </div>
+
+                    {quickText.trim() && (
+                      <button
+                        type="submit"
+                        className="vision-btn bg-[#1d9bf0] hover:bg-[#1a8cd8] text-white text-xs font-semibold px-4 py-1.5 rounded-full shadow"
+                      >
+                        Post
+                      </button>
+                    )}
                   </div>
                 </form>
-              </div>
-            ) : (
-              /* Structured Q&A Answers View with Upvote/Downvote & Accepted Answer */
-              <div className="flex-1 flex flex-col overflow-hidden">
-                <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                  {activePost ? (
-                    <>
-                      <div className="p-4 rounded-2xl bg-sky-500/10 border border-sky-400/30">
-                        <div className="text-xs text-sky-300 mb-1">
-                          Question by @{activePost.author_username} • Score:{" "}
-                          {activePost.score}
-                        </div>
-                        <h3 className="text-base font-bold mb-2">
-                          {activePost.title}
-                        </h3>
-                        {renderMarkdownElements(activePost.body_markdown)}
-                      </div>
 
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-white/50">
-                        {postComments.length} Community Answers
-                      </h4>
+                {/* Feed Posts List */}
+                {visiblePosts.map((post) => {
+                  const isBookmarked = bookmarkedIds.includes(post.id);
+                  const isExpanded = expandedPostId === post.id;
+                  const hasAccepted = (post.comments || []).some(
+                    (c) => c.is_accepted
+                  );
 
-                      {postComments.map((c) => {
-                        const isAccepted =
-                          activePost.accepted_comment_id === c.id;
-                        return (
-                          <div
-                            key={c.id}
-                            className={`p-4 rounded-2xl border ${
-                              isAccepted
-                                ? "bg-emerald-500/15 border-emerald-400/50"
-                                : "bg-black/30 border-white/10"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between text-xs mb-2">
-                              <div className="flex items-center gap-2">
-                                <span
-                                  onClick={() =>
-                                    openUserProfile(c.author_username)
-                                  }
-                                  className="font-semibold text-white hover:underline cursor-pointer"
-                                >
-                                  @{c.author_username}
-                                </span>
-                                {isAccepted && (
-                                  <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-white text-[10px] font-bold flex items-center gap-1">
-                                    <CheckCircle2 className="w-3 h-3" />{" "}
-                                    Accepted Answer
-                                  </span>
-                                )}
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                {currentUser?.id === activePost.author_id &&
-                                  !isAccepted && (
-                                    <button
-                                      onClick={() => handleAcceptAnswer(c.id)}
-                                      className="px-2.5 py-1 rounded-full bg-emerald-500/20 hover:bg-emerald-500/40 text-emerald-300 text-[11px]"
-                                    >
-                                      ✓ Mark Accepted
-                                    </button>
-                                  )}
-                                <button
-                                  onClick={() => handleVote("COMMENT", c.id, 1)}
-                                  className="px-2 py-0.5 rounded-full bg-white/10 hover:bg-emerald-500/30 text-xs flex items-center gap-1"
-                                >
-                                  ▲ {c.score}
-                                </button>
-                                <button
-                                  onClick={() =>
-                                    handleVote("COMMENT", c.id, -1)
-                                  }
-                                  className="px-2 py-0.5 rounded-full bg-white/10 hover:bg-rose-500/30 text-xs"
-                                >
-                                  ▼
-                                </button>
-                              </div>
-                            </div>
-
-                            {renderMarkdownElements(c.body_markdown)}
-                          </div>
-                        );
-                      })}
-                    </>
-                  ) : (
-                    <div className="text-center py-12 text-white/40 text-xs">
-                      Select a question from the group feed to view or post
-                      answers.
-                    </div>
-                  )}
-                </div>
-
-                {activePost && (
-                  <form
-                    onSubmit={handleAddAnswer}
-                    className="p-4 bg-black/30 border-t border-white/10 flex gap-2"
-                  >
-                    <textarea
-                      rows={2}
-                      value={answerInput}
-                      onChange={(e) => setAnswerInput(e.target.value)}
-                      placeholder="Write a helpful Markdown answer (use ``` for code blocks)..."
-                      className="flex-1 px-3.5 py-2 rounded-2xl bg-black/40 border border-white/15 text-xs font-mono"
-                    />
-                    <button
-                      type="submit"
-                      className="px-4 py-2 rounded-2xl bg-sky-500 hover:bg-sky-400 text-xs font-semibold shrink-0"
+                  return (
+                    <article
+                      key={post.id}
+                      className="px-6 py-4 hover:bg-white/[0.03] transition-colors space-y-2.5"
                     >
-                      Post Answer
-                    </button>
-                  </form>
-                )}
-              </div>
-            )}
-          </section>
-        )}
-
-        {/* -------------------------------------------------------------------
-            C. RIGHT 3D-TILTED SPATIAL WING PANEL (Mirrors "Messages" Panel in Reference Image)
-            Clicking anywhere on this panel smoothly glides it to Center Stage!
-        -------------------------------------------------------------------- */}
-        {focusedStage === "GROUPS_IN_CENTER" && (
-          <aside
-            onClick={() => setFocusedStage("CHAT_IN_CENTER")}
-            className="spatial-glass spatial-right-wing w-80 lg:w-96 h-full max-h-[560px] rounded-[32px] flex flex-col overflow-hidden cursor-pointer shrink-0"
-            title="Click to bring Group Chat & Thread to Center Stage!"
-          >
-            {/* Right Wing Header (Mirrors "Messages" + Expand Icon in Reference Image) */}
-            <div className="px-5 pt-5 pb-3 border-b border-white/10 flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-bold tracking-tight flex items-center gap-1.5">
-                  <span>#{activeGroup?.name || "Select Group"}</span>
-                </h2>
-                <p className="text-[11px] text-sky-300">
-                  Click panel to bring to Center Stage ⤢
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setRightPanelTab(
-                      rightPanelTab === "LIVE_CHAT" ? "QA_THREAD" : "LIVE_CHAT",
-                    );
-                  }}
-                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center"
-                  title="Toggle Chat vs Q&A Answers"
-                >
-                  <MessageSquare className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setFocusedStage("CHAT_IN_CENTER");
-                  }}
-                  className="w-8 h-8 rounded-full bg-white/15 hover:bg-sky-500 flex items-center justify-center transition"
-                  title="Bring to Center Stage"
-                >
-                  <Maximize2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Right Wing Content Preview (People Chatting in Selected Group) */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              {rightPanelTab === "LIVE_CHAT"
-                ? groupMessages.length > 0
-                  ? groupMessages.map((msg, idx) => (
-                      <div
-                        key={msg._id || idx}
-                        className="flex items-start gap-3 p-2.5 rounded-2xl hover:bg-white/10 transition border-b border-white/5"
-                      >
-                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 text-zinc-950 font-bold text-xs flex items-center justify-center shrink-0">
-                          {msg.senderUsername?.slice(0, 2).toUpperCase()}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-semibold text-white truncate">
-                              {msg.senderUsername}
+                      {/* Post Author Row */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <img
+                            src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${
+                              post.author_username || post.author_name || "user"
+                            }`}
+                            alt={post.author_name}
+                            className="w-8 h-8 rounded-full bg-white/10 border border-white/15"
+                          />
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-semibold text-sm text-white">
+                              {post.author_name || "Developer"}
                             </span>
-                            <span className="text-[10px] text-white/45">
+                            <CheckCircle2 className="w-4 h-4 text-[#1d9bf0] fill-[#1d9bf0]/20" />
+                            <span className="text-xs text-white/50">
+                              @{post.author_username || "dev"} ·{" "}
                               {new Date(
-                                msg.createdAt || Date.now(),
+                                post.created_at || Date.now()
                               ).toLocaleTimeString([], {
                                 hour: "2-digit",
                                 minute: "2-digit",
                               })}
                             </span>
                           </div>
-                          <p className="text-xs text-white/70 truncate mt-0.5">
-                            {msg.content}
-                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {hasAccepted && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-medium bg-emerald-500/20 text-emerald-300 px-2.5 py-0.5 rounded-full border border-emerald-500/30">
+                              <Check className="w-3 h-3" /> Solved
+                            </span>
+                          )}
+                          {currentUser &&
+                            (currentUser.username === post.author_username ||
+                              currentUser.id === post.user_id) && (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => {
+                                    setEditingPost(post);
+                                    setActiveModal("editPost");
+                                  }}
+                                  className="p-1 text-white/45 hover:text-white"
+                                  title="Edit Post"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeletePost(post.id)}
+                                  className="p-1 text-white/45 hover:text-rose-400"
+                                  title="Delete Post"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            )}
                         </div>
                       </div>
-                    ))
-                  : /* If no live chat messages yet, show active Post Answers in the Group */
-                    postComments.map((c) => (
-                      <div
-                        key={c.id}
-                        className="flex items-start gap-3 p-2.5 rounded-2xl hover:bg-white/10 transition border-b border-white/5"
-                      >
-                        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-sky-400 to-indigo-500 text-white font-bold text-xs flex items-center justify-center shrink-0">
-                          {c.author_username?.slice(0, 2).toUpperCase()}
+
+                      {/* Post Body & Markdown */}
+                      <div className="pl-10 space-y-2">
+                        {post.title &&
+                          !post.content?.startsWith(post.title) && (
+                            <h2 className="text-[15px] font-semibold text-white">
+                              {post.title}
+                            </h2>
+                          )}
+                        <div className="text-[13.5px] leading-relaxed text-white/88 space-y-1.5">
+                          {renderMarkdownElements
+                            ? renderMarkdownElements(post.content || "")
+                            : post.content}
                         </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-semibold text-white">
-                              @{c.author_username}
-                            </span>
-                            <span className="text-[10px] text-emerald-300">
-                              +{c.score}
+
+                        {/* Tags */}
+                        {post.tags?.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 pt-1">
+                            {post.tags.map((tag) => (
+                              <button
+                                key={tag}
+                                onClick={() => setSelectedTag(tag)}
+                                className="text-xs text-[#58b9ff] hover:underline"
+                              >
+                                #{tag}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Two-Column Media Grid (Matches spatialui.webp) */}
+                        {post.media_urls?.length > 0 && (
+                          <div
+                            className={`grid gap-2.5 pt-2 ${
+                              post.media_urls.length > 1
+                                ? "grid-cols-2"
+                                : "grid-cols-1"
+                            }`}
+                          >
+                            {post.media_urls.map((url, idx) => (
+                              <div
+                                key={idx}
+                                className="rounded-2xl overflow-hidden border border-white/15 bg-black/30 aspect-video"
+                              >
+                                <img
+                                  src={url}
+                                  alt="Post attachment"
+                                  className="w-full h-full object-cover hover:scale-105 transition-transform duration-500"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Bottom Metrics Row (Matches spatialui.webp) */}
+                        <div className="flex items-center justify-between pt-2 text-xs text-white/55">
+                          <div className="flex items-center gap-6">
+                            <button
+                              onClick={() =>
+                                setExpandedPostId(isExpanded ? null : post.id)
+                              }
+                              className="flex items-center gap-1.5 hover:text-white transition-colors"
+                            >
+                              <MessageCircle className="w-4 h-4" />
+                              <span>
+                                {(post.comments || []).length ||
+                                  post.comment_count ||
+                                  0}
+                              </span>
+                            </button>
+
+                            <button
+                              onClick={() => handleVote(post.id, 1)}
+                              className="flex items-center gap-1.5 hover:text-emerald-400 transition-colors"
+                              title="Upvote"
+                            >
+                              <ChevronUp className="w-4 h-4" />
+                              <span>{post.upvotes || 0}</span>
+                            </button>
+
+                            <button
+                              onClick={() => handleVote(post.id, -1)}
+                              className="flex items-center gap-1 hover:text-rose-400 transition-colors"
+                              title="Downvote"
+                            >
+                              <ChevronDown className="w-4 h-4" />
+                            </button>
+
+                            <span className="hidden sm:flex items-center gap-1.5">
+                              <BarChart2 className="w-4 h-4" />
+                              <span>
+                                {((Number(post.upvotes) || 12) * 34).toLocaleString()}
+                              </span>
                             </span>
                           </div>
-                          <p className="text-xs text-white/70 line-clamp-2 mt-0.5">
-                            {c.body_markdown}
-                          </p>
+
+                          <div className="flex items-center gap-3">
+                            <button
+                              onClick={() => toggleBookmark(post.id)}
+                              className={`hover:text-white transition-colors ${
+                                isBookmarked ? "text-[#1d9bf0]" : ""
+                              }`}
+                              title="Bookmark"
+                            >
+                              <Bookmark className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() =>
+                                navigator.clipboard?.writeText(
+                                  window.location.href
+                                )
+                              }
+                              className="hover:text-white transition-colors"
+                              title="Share Link"
+                            >
+                              <Share className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
+
+                        {/* Expandable Answers / Comments Drawer */}
+                        {isExpanded && (
+                          <div className="mt-3 pt-3 border-t border-white/10 space-y-2.5">
+                            {(post.comments || []).map((c) => (
+                              <div
+                                key={c.id}
+                                className={`p-3 rounded-2xl border text-xs space-y-1 ${
+                                  c.is_accepted
+                                    ? "bg-emerald-500/12 border-emerald-500/40"
+                                    : "bg-black/25 border-white/10"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="font-semibold text-white">
+                                    {c.author_name}{" "}
+                                    <span className="text-white/45 font-normal">
+                                      @{c.author_username}
+                                    </span>
+                                  </span>
+                                  <button
+                                    onClick={() =>
+                                      handleToggleAccepted(post.id, c.id)
+                                    }
+                                    className={`px-2 py-0.5 rounded-full text-[11px] font-medium transition-all ${
+                                      c.is_accepted
+                                        ? "bg-emerald-500 text-black font-semibold"
+                                        : "bg-white/10 text-white/60 hover:text-white"
+                                    }`}
+                                  >
+                                    {c.is_accepted
+                                      ? "✓ Accepted Answer"
+                                      : "Mark Accepted"}
+                                  </button>
+                                </div>
+                                <p className="text-white/85 leading-relaxed">
+                                  {c.content}
+                                </p>
+                              </div>
+                            ))}
+
+                            <div className="flex gap-2 pt-1">
+                              <input
+                                type="text"
+                                value={commentDraft}
+                                onChange={(e) =>
+                                  setCommentDraft(e.target.value)
+                                }
+                                placeholder="Write an answer or comment..."
+                                className="flex-1 bg-black/30 text-xs text-white rounded-full px-4 py-2 border border-white/15 outline-none focus:border-white/35"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleAddComment(post.id)}
+                                className="vision-btn bg-[#1d9bf0] text-white text-xs font-semibold px-4 py-2 rounded-full"
+                              >
+                                Reply
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    ))
-                : postComments.map((c) => (
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            /* ==================== SPATIAL LIVE ROOM CHAT VIEW ==================== */
+            <div className="flex flex-col h-full animate-fadeIn">
+              {/* Chat Room Header */}
+              <div className="px-6 py-4 border-b border-white/[0.09] flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setCenterMode("feed")}
+                    className="vision-btn w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white"
+                    title="Back to Community Feed"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <Hash className="w-4 h-4 text-[#1d9bf0]" />
+                      <h2 className="font-bold text-base text-white">
+                        {activeGroup?.name || "general-dev"}
+                      </h2>
+                      <span className="text-[11px] bg-white/10 text-white/70 px-2 py-0.5 rounded-full">
+                        {activeServer?.name}
+                      </span>
+                    </div>
+                    <p className="text-xs text-white/55">
+                      Real-time spatial WebSocket stream · Click left monograms to switch rooms
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setActiveModal("createGroup")}
+                  className="vision-btn bg-white/10 hover:bg-white/18 text-xs font-medium px-3 py-1.5 rounded-full border border-white/12 flex items-center gap-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5" /> New Room
+                </button>
+              </div>
+
+              {/* Messages Stream */}
+              <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
+                {messages.map((msg, i) => {
+                  const isMe =
+                    msg.sender_name ===
+                      (currentUser?.username || currentUser?.name || "You") ||
+                    msg.sender_id === "guest";
+                  return (
                     <div
-                      key={c.id}
-                      className="p-3 rounded-2xl bg-black/25 border border-white/10 text-xs"
+                      key={msg._id || i}
+                      className={`flex items-start gap-3 ${
+                        isMe ? "flex-row-reverse" : ""
+                      }`}
                     >
-                      <div className="font-semibold text-sky-300 mb-1">
-                        @{c.author_username}
-                      </div>
-                      <div className="line-clamp-3 text-white/80">
-                        {c.body_markdown}
+                      <img
+                        src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${
+                          msg.sender_name || "dev"
+                        }`}
+                        alt={msg.sender_name}
+                        className="w-8 h-8 rounded-full bg-white/10 border border-white/15 shrink-0"
+                      />
+                      <div
+                        className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-sm ${
+                          isMe
+                            ? "bg-[#1d9bf0] text-white"
+                            : "bg-white/10 text-white/90 border border-white/12"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-xs font-semibold opacity-90">
+                            {msg.sender_name || "Developer"}
+                          </span>
+                          <span className="text-[10px] opacity-60">
+                            {new Date(
+                              msg.createdAt || Date.now()
+                            ).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                        </div>
+                        <p className="leading-relaxed break-words">
+                          {msg.content}
+                        </p>
                       </div>
                     </div>
-                  ))}
+                  );
+                })}
+                <div ref={chatEndRef} />
+              </div>
 
-              {groupMessages.length === 0 && postComments.length === 0 && (
-                <div className="text-center py-12 px-4 text-xs text-white/50">
-                  Click this 3D panel to bring{" "}
-                  <strong>#{activeGroup?.name}</strong> to Center Stage and
-                  start chatting or answering!
-                </div>
-              )}
+              {/* Message Input Bar */}
+              <form
+                onSubmit={handleSendChat}
+                className="px-6 py-3.5 border-t border-white/[0.09] flex items-center gap-3 bg-black/15"
+              >
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder={`Message #${activeGroup?.name || "channel"}...`}
+                  className="flex-1 bg-white/8 focus:bg-white/12 text-sm text-white placeholder:text-white/50 rounded-full px-5 py-2.5 border border-white/14 outline-none"
+                />
+                <button
+                  type="submit"
+                  className="vision-btn w-10 h-10 rounded-full bg-[#1d9bf0] hover:bg-[#1a8cd8] text-white flex items-center justify-center shrink-0 shadow"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </form>
             </div>
-          </aside>
-        )}
+          )}
+        </section>
+
+        {/* 2D. RIGHT 3D TILTED MESSAGES / GROUPS PANEL (Matches spatialui.webp) */}
+        <aside
+          className={`vision-window spatial-right-wing rounded-[32px] h-full w-[330px] xl:w-[360px] flex-col overflow-hidden shrink-0 ${
+            mobileWingOpen
+              ? "fixed inset-x-4 top-16 bottom-20 z-50 flex w-auto"
+              : "hidden lg:flex"
+          }`}
+        >
+          {/* Header Row ("Messages" + Top-Right Circular Icons matching spatialui.webp) */}
+          <div className="px-5 pt-5 pb-3 border-b border-white/[0.08] flex items-center justify-between">
+            <h2 className="text-lg font-bold tracking-tight text-white">
+              {rightPanelTab === "groups" ? "Messages" : "People"}
+            </h2>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() =>
+                  setRightPanelTab(
+                    rightPanelTab === "groups" ? "people" : "groups"
+                  )
+                }
+                className="vision-btn w-8 h-8 rounded-full bg-white/12 hover:bg-white/20 flex items-center justify-center text-white/85 border border-white/12"
+                title="Switch between Group Channels and People"
+              >
+                <Mail className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() =>
+                  setCenterMode(centerMode === "chat" ? "feed" : "chat")
+                }
+                className="vision-btn w-8 h-8 rounded-full bg-white/12 hover:bg-white/20 flex items-center justify-center text-white/85 border border-white/12"
+                title="Expand Chat into Center Window"
+              >
+                <Maximize2 className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Subtle Mode Switcher Pills (Groups vs Direct People) */}
+          <div className="px-5 py-2.5 flex items-center justify-between gap-2 border-b border-white/[0.06]">
+            <div className="flex gap-1.5">
+              <button
+                onClick={() => setRightPanelTab("groups")}
+                className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+                  rightPanelTab === "groups"
+                    ? "bg-white/20 text-white"
+                    : "text-white/55 hover:text-white"
+                }`}
+              >
+                Groups ({activeServer?.groups?.length || 0})
+              </button>
+              <button
+                onClick={() => setRightPanelTab("people")}
+                className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+                  rightPanelTab === "people"
+                    ? "bg-white/20 text-white"
+                    : "text-white/55 hover:text-white"
+                }`}
+              >
+                People ({DIRECT_PEOPLE.length})
+              </button>
+            </div>
+
+            <button
+              onClick={() => setActiveModal("createServer")}
+              className="text-xs text-[#58b9ff] hover:underline flex items-center gap-0.5"
+            >
+              <Plus className="w-3.5 h-3.5" /> Server
+            </button>
+          </div>
+
+          {/* Scrollable List matching spatialui.webp */}
+          <div className="flex-1 overflow-y-auto divide-y divide-white/[0.07]">
+            {rightPanelTab === "groups"
+              ? servers.flatMap((srv) =>
+                  (srv.groups || []).map((grp) => {
+                    const isSelected =
+                      centerMode === "chat" && activeGroup?.id === grp.id;
+                    return (
+                      <button
+                        key={grp.id}
+                        onClick={() => handleSelectGroup(grp, srv)}
+                        className={`w-full px-5 py-3.5 flex items-center gap-3.5 text-left transition-all ${
+                          isSelected
+                            ? "bg-white/14"
+                            : "hover:bg-white/[0.06]"
+                        }`}
+                      >
+                        <img
+                          src={`https://api.dicebear.com/7.x/shapes/svg?seed=${grp.name}`}
+                          alt={grp.name}
+                          className="w-11 h-11 rounded-full bg-white/10 border border-white/15 shrink-0 object-cover"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-semibold text-sm text-white truncate">
+                              {grp.name}
+                            </span>
+                            <CheckCircle2 className="w-3.5 h-3.5 text-white/80 fill-white/20 shrink-0" />
+                            <span className="text-xs text-white/45 truncate">
+                              @{srv.name.toLowerCase().replace(/\s+/g, "")} ·{" "}
+                              {grp.time || "now"}
+                            </span>
+                          </div>
+                          <p className="text-xs text-white/60 truncate mt-0.5">
+                            {grp.lastMsg ||
+                              "Click to open live group room in center stage..."}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })
+                )
+              : DIRECT_PEOPLE.map((person) => (
+                  <button
+                    key={person.id}
+                    onClick={() =>
+                      handleSelectGroup(
+                        { id: person.id, name: person.name },
+                        { id: "dm", name: "Direct Message", groups: [] }
+                      )
+                    }
+                    className="w-full px-5 py-3.5 flex items-center gap-3.5 text-left hover:bg-white/[0.06] transition-all"
+                  >
+                    <img
+                      src={person.avatar}
+                      alt={person.name}
+                      className="w-11 h-11 rounded-full bg-white/10 border border-white/15 shrink-0 object-cover"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-semibold text-sm text-white truncate">
+                          {person.name}
+                        </span>
+                        <CheckCircle2 className="w-3.5 h-3.5 text-white/85 fill-white/20 shrink-0" />
+                        <span className="text-xs text-white/45 truncate">
+                          {person.handle} · {person.time}
+                        </span>
+                      </div>
+                      <p className="text-xs text-white/60 truncate mt-0.5">
+                        {person.preview}
+                      </p>
+                    </div>
+                  </button>
+                ))}
+          </div>
+        </aside>
       </main>
 
-      {/* =====================================================================
-          3. BOTTOM FLOATING DOCK (Mirrors Bottom Warm Glass Pill in Reference Image)
-      ====================================================================== */}
-      <footer className="fixed bottom-4 left-1/2 -translate-x-1/2 z-30">
-        <div className="spatial-Bottom-Dock px-7 py-2.5 rounded-full flex items-center gap-7">
-          <button
-            onClick={() => setFocusedStage("GROUPS_IN_CENTER")}
-            className="text-white/80 hover:text-white transition"
-            title="Home Stage"
-          >
-            <Home className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() =>
-              document.querySelector('input[placeholder*="Search"]')?.focus()
-            }
-            className="text-white/80 hover:text-white transition"
-            title="Omni-Search"
-          >
-            <Search className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setShowNotifications(!showNotifications)}
-            className="text-white/80 hover:text-white transition"
-            title="Notifications"
-          >
-            <Bell className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setFocusedStage("CHAT_IN_CENTER")}
-            className="text-white/80 hover:text-white transition"
-            title="Focus Group Chat"
-          >
-            <MessageSquare className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setActiveModal(currentUser ? "CREATE_HUB" : "AUTH")}
-            className="text-white/80 hover:text-white transition"
-            title="Create Post / Group / Server"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setActiveModal("SETTINGS")}
-            className="text-white/80 hover:text-white transition"
-            title="Environment & Profile Settings"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
-        </div>
+      {/* =========================================================
+          3. BOTTOM FLOATING VISIONOS ORNAMENT DOCK (Matches spatialui.webp)
+         ========================================================= */}
+      <footer className="relative z-30 vision-dock-bottom rounded-full px-7 py-2.5 flex items-center gap-7 sm:gap-10">
+        {[
+          {
+            id: "home",
+            icon: Home,
+            label: "Home",
+            onClick: () => {
+              setNavTab("home");
+              setCenterMode("feed");
+              setMobileWingOpen(false);
+            },
+          },
+          {
+            id: "search",
+            icon: Search,
+            label: "Explore",
+            onClick: () => {
+              setNavTab("search");
+              setCenterMode("feed");
+              setMobileWingOpen(false);
+            },
+          },
+          {
+            id: "notifications",
+            icon: Bell,
+            label: "Activity",
+            onClick: () => {
+              setCenterMode("feed");
+              setActiveModal("createPost");
+            },
+          },
+          {
+            id: "messages",
+            icon: Mail,
+            label: "Messages & Groups",
+            onClick: () => {
+              if (window.innerWidth < 1024) {
+                setMobileWingOpen((v) => !v);
+              } else {
+                setCenterMode((m) => (m === "chat" ? "feed" : "chat"));
+              }
+            },
+          },
+          {
+            id: "bookmarks",
+            icon: Bookmark,
+            label: "Bookmarks",
+            onClick: () => {
+              setNavTab("bookmarks");
+              setCenterMode("feed");
+              setMobileWingOpen(false);
+            },
+          },
+          {
+            id: "settings",
+            icon: Settings,
+            label: "Spatial Environment",
+            onClick: () => setActiveModal("background"),
+          },
+        ].map((item) => {
+          const Icon = item.icon;
+          const active =
+            (item.id === "messages" && (centerMode === "chat" || mobileWingOpen)) ||
+            (item.id !== "messages" && navTab === item.id && centerMode === "feed");
+          return (
+            <button
+              key={item.id}
+              onClick={item.onClick}
+              title={item.label}
+              className={`vision-btn p-1.5 rounded-full transition-all ${
+                active
+                  ? "text-white scale-110"
+                  : "text-white/70 hover:text-white"
+              }`}
+            >
+              <Icon className="w-5 h-5" />
+            </button>
+          );
+        })}
       </footer>
 
-      {/* Modals for Auth, Create Server/Group/Post, Settings & User Profiles */}
+      {/* Spatial Glass Modals */}
       <SpatialModals
-        activeGroup={activeGroup}
         activeModal={activeModal}
-        activeServer={activeServer}
-        bgImage={bgImage}
-        currentUser={currentUser}
-        onRefreshData={fetchInitialWorkspace}
         setActiveModal={setActiveModal}
-        setBgImage={setBgImage}
+        currentUser={currentUser}
         setCurrentUser={setCurrentUser}
+        activeServer={activeServer}
+        activeGroup={activeGroup}
+        editingPost={editingPost}
         viewedProfile={viewedProfile}
+        bgImage={bgImage}
+        setBgImage={(url) => {
+          setBgImage(url);
+          localStorage.setItem("spatial_bg", url);
+        }}
+        onRefreshData={fetchInitialData}
       />
     </div>
   );
